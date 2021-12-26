@@ -9,6 +9,11 @@ from scipy.constants import m_p
 from scipy.constants import e as qe
 from scipy.constants import c as clight
 
+"""
+19/10/2021: add test attribute for test particles that do not contribute to the bb field but are affected by it
+12/11/2021: add faster computation of covariance
+"""
+
 pmass = m_p * clight * clight / qe
 
 LAST_INVALID_STATE = -999999999
@@ -55,6 +60,7 @@ per_particle_vars = (
         (xo.Int64, 'at_element'),
         (xo.Int64, 'at_turn'),
         (xo.Int64, 'state'),
+        (xo.Int64, 'test'),
         (xo.Int64, 'parent_particle_id'),
         (xo.UInt32, '__rng_s1'),
         (xo.UInt32, '__rng_s2'),
@@ -123,6 +129,7 @@ class Particles(xo.dress(ParticlesData, rename={
              - particle_id [int]: Identifier of the particle
              - at_turn [int]:  Number of tracked turns
              - state [int]:  It is ``0`` if the particle is lost, ``1`` otherwise
+             - test [int]:  It is ``1`` if the particle is a test particle, ``0`` otherwise
              - weight [int]:  Particle weight in number of particles
                               (for collective sims.)
              - at_element [int]: Identifier of the last element through which
@@ -510,6 +517,25 @@ class Particles(xo.dress(ParticlesData, rename={
 
         self.rvv = rvv
         self.rpp = 1. / one_plus_delta
+
+    def get_sigma_matrix(self, mask=[]):
+        if len(mask) == 0:
+            cov_matrix = np.cov(np.array([self.x[self.test==0], self.px[self.test==0], self.y[self.test==0], self.py[self.test==0]]), bias=True)
+        else:
+            cov_matrix = np.cov(np.array([self.x[mask][self.test[mask]==0], self.px[mask][self.test[mask]==0],
+                                          self.y[mask][self.test[mask]==0], self.py[mask][self.test[mask]==0]]), bias=True)
+        return {
+                "Sig_11": cov_matrix[0,0],
+                "Sig_12": cov_matrix[0,1],
+                "Sig_13": cov_matrix[0,2],
+                "Sig_14": cov_matrix[0,3],
+                "Sig_22": cov_matrix[1,1],
+                "Sig_23": cov_matrix[1,2],
+                "Sig_24": cov_matrix[1,3],
+                "Sig_33": cov_matrix[2,2],
+                "Sig_34": cov_matrix[2,3],
+                "Sig_44": cov_matrix[3,3],
+                }
 
     def set_reference(self, p0c=7e12, mass0=pmass, q0=1):
         self.q0 = q0

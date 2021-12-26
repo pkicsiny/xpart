@@ -11,6 +11,10 @@ pmass = pmass_kg*clight**2/qe
 
 from xobjects import JEncoder
 
+"""
+19/10/2021: add test attribute for test particles that do not contribute to the bb field but are affected by it
+"""
+
 def count_not_none(*lst):
     return len(lst) - sum(p is None for p in lst)
 
@@ -233,6 +237,7 @@ class Pyparticles:
         parent_particle_id = kwargs.get('parent_particle_id', None)
         at_turn = kwargs.get('at_turn', None)
         state = kwargs.get('state', None)  # == 0 particle lost, == 1 particle active
+        test = kwargs.get('test', None) 
         weight = kwargs.get('weight', None)
         at_element = kwargs.get('at_element', None)
 
@@ -278,6 +283,10 @@ class Pyparticles:
         if state is None:
             state = np.ones(length) if length is not None else 1
         self.state = state
+
+        if test is None:
+            test = np.zeros(length) if length is not None else 0
+        self.test = test
 
         if weight is None:
             weight = np.ones(length, dtype=np.float64) if length is not None else 1
@@ -477,6 +486,7 @@ class Pyparticles:
         charge_ratio  = {self.charge_ratio}
         chi     = {self.chi}
         state   = {self.state}
+        test    = {self.test}
         weight  = {self.weight}"""
         return out
 
@@ -497,6 +507,7 @@ class Pyparticles:
         "parent_particle_id",
         "at_turn",
         "state",
+        "test",
         "weight",
     )
 

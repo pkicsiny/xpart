@@ -13,6 +13,7 @@ from xobjects import JEncoder
 
 """
 19/10/2021: add test attribute for test particles that do not contribute to the bb field but are affected by it
+27/12/2021: add slice_id attribute for indicating slice of particle
 """
 
 def count_not_none(*lst):
@@ -237,7 +238,8 @@ class Pyparticles:
         parent_particle_id = kwargs.get('parent_particle_id', None)
         at_turn = kwargs.get('at_turn', None)
         state = kwargs.get('state', None)  # == 0 particle lost, == 1 particle active
-        test = kwargs.get('test', None) 
+        test = kwargs.get('test', None)
+        slice_id = kwargs.get('slice_id', None) 
         weight = kwargs.get('weight', None)
         at_element = kwargs.get('at_element', None)
 
@@ -287,6 +289,10 @@ class Pyparticles:
         if test is None:
             test = np.zeros(length) if length is not None else 0
         self.test = test
+
+        if slice_id is None:
+            slice_id = np.zeros(length) if length is not None else 0
+        self.slice_id = slice_id
 
         if weight is None:
             weight = np.ones(length, dtype=np.float64) if length is not None else 1
@@ -484,10 +490,11 @@ class Pyparticles:
         ptau    = {self.ptau}
         mass_ratio  = {self.mass_ratio}
         charge_ratio  = {self.charge_ratio}
-        chi     = {self.chi}
-        state   = {self.state}
-        test    = {self.test}
-        weight  = {self.weight}"""
+        chi      = {self.chi}
+        state    = {self.state}
+        test     = {self.test}
+        slice_id = {self.slice_id}
+        weight   = {self.weight}"""
         return out
 
     _dict_vars = (
@@ -508,6 +515,7 @@ class Pyparticles:
         "at_turn",
         "state",
         "test",
+        "slice_id",
         "weight",
     )
 

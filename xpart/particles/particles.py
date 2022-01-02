@@ -12,6 +12,7 @@ from scipy.constants import c as clight
 """
 19/10/2021: add test attribute for test particles that do not contribute to the bb field but are affected by it
 12/11/2021: add faster computation of covariance
+27/12/2021: add slice_id attribute for indicating slice of particle
 """
 
 pmass = m_p * clight * clight / qe
@@ -61,6 +62,7 @@ per_particle_vars = (
         (xo.Int64, 'at_turn'),
         (xo.Int64, 'state'),
         (xo.Int64, 'test'),
+        (xo.Int64, 'slice_id'),
         (xo.Int64, 'parent_particle_id'),
         (xo.UInt32, '__rng_s1'),
         (xo.UInt32, '__rng_s2'),
@@ -130,6 +132,7 @@ class Particles(xo.dress(ParticlesData, rename={
              - at_turn [int]:  Number of tracked turns
              - state [int]:  It is ``0`` if the particle is lost, ``1`` otherwise
              - test [int]:  It is ``1`` if the particle is a test particle, ``0`` otherwise
+             - slice_id [int]: The ID of the longitudinal slice the particle belongs to. ``0`` by default.
              - weight [int]:  Particle weight in number of particles
                               (for collective sims.)
              - at_element [int]: Identifier of the last element through which

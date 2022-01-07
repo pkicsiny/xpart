@@ -9,6 +9,9 @@ from scipy.constants import m_p
 from scipy.constants import e as qe
 from scipy.constants import c as clight
 
+from xobjects import BypassLinked
+
+
 """
 19/10/2021: add test attribute for test particles that do not contribute to the bb field but are affected by it
 12/11/2021: add faster computation of covariance
@@ -202,25 +205,26 @@ class Particles(xo.dress(ParticlesData, rename={
         # Copy per-particle vars
         first = 0
         max_id_curr = -1
-        for pp in cpu_lst:
-            for tt, nn in per_particle_vars:
-                if not(nn == 'particle_id' or nn == 'parent_id'):
-                    getattr(new_part_cpu, nn)[
-                            first:first+pp._capacity] = getattr(pp, nn)
+        with new_part_cpu._bypass_linked_vars():
+            for pp in cpu_lst:
+                for tt, nn in per_particle_vars:
+                    if not(nn == 'particle_id' or nn == 'parent_id'):
+                        getattr(new_part_cpu, nn)[
+                                first:first+pp._capacity] = getattr(pp, nn)
 
-            # Handle particle_ids and parent_ids
-            mask = pp.particle_id >= 0
-            new_id = pp.particle_id.copy()
-            new_parent_id = pp.parent_particle_id.copy()
-            if np.min(new_id[mask]) <= max_id_curr:
-                new_id[mask] += (max_id_curr + 1)
-                new_parent_id[mask] += (max_id_curr + 1)
-            new_part_cpu.particle_id[first:first+len(new_id)] = new_id
-            new_part_cpu.parent_particle_id[
-                    first:first+len(new_id)] = new_parent_id
+                # Handle particle_ids and parent_ids
+                mask = pp.particle_id >= 0
+                new_id = pp.particle_id.copy()
+                new_parent_id = pp.parent_particle_id.copy()
+                if np.min(new_id[mask]) <= max_id_curr:
+                    new_id[mask] += (max_id_curr + 1)
+                    new_parent_id[mask] += (max_id_curr + 1)
+                new_part_cpu.particle_id[first:first+len(new_id)] = new_id
+                new_part_cpu.parent_particle_id[
+                        first:first+len(new_id)] = new_parent_id
 
-            max_id_curr = np.max(new_id)
-            first += pp._capacity
+                max_id_curr = np.max(new_id)
+                first += pp._capacity
 
         # Reorganize
         new_part_cpu.reorganize()
@@ -265,12 +269,13 @@ class Particles(xo.dress(ParticlesData, rename={
 
         # Copy per-particle vars
         for tt, nn in per_particle_vars:
-            getattr(new_part_cpu, nn)[:] = getattr(self_cpu, nn)[mask]
+            with new_part_cpu._bypass_linked_vars():
+                getattr(new_part_cpu, nn)[:] = getattr(self_cpu, nn)[mask]
 
         # Reorganize
         new_part_cpu.reorganize()
 
-        # Copy to original context 
+        # Copy to original context
         target_ctx = self._buffer.context
         if isinstance(target_ctx, xo.ContextCpu):
             new_part_cpu._buffer.context = target_ctx
@@ -312,30 +317,31 @@ class Particles(xo.dress(ParticlesData, rename={
             self.xoinitialize(**kwargs)
 
             # Initialize coordinates
-            if pyparticles is not None:
-                context = self._buffer.context
-                for tt, kk in list(scalar_vars):
-                    setattr(self, kk, part_dict[kk])
-                for tt, kk in list(per_particle_vars):
-                    if kk.startswith('__'):
-                        continue
-                    vv = getattr(self, kk)
-                    vals =  context.nparray_to_context_array(part_dict[kk])
-                    ll = len(vals)
-                    vv[:ll] = vals
-                    vv[ll:] = LAST_INVALID_STATE
-            else:
-                for tt, kk in list(scalar_vars):
-                    setattr(self, kk, 0.)
+            with self._bypass_linked_vars():
+                if pyparticles is not None:
+                    context = self._buffer.context
+                    for tt, kk in list(scalar_vars):
+                        setattr(self, kk, part_dict[kk])
+                    for tt, kk in list(per_particle_vars):
+                        if kk.startswith('__'):
+                            continue
+                        vv = getattr(self, kk)
+                        vals =  context.nparray_to_context_array(part_dict[kk])
+                        ll = len(vals)
+                        vv[:ll] = vals
+                        vv[ll:] = LAST_INVALID_STATE
+                else:
+                    for tt, kk in list(scalar_vars):
+                        setattr(self, kk, 0.)
 
-                for tt, kk in list(per_particle_vars):
-                    if kk == 'chi' or kk == 'charge_ratio' or kk == 'state':
-                        value = 1.
-                    elif kk == 'particle_id':
-                        value = np.arange(0, self._capacity, dtype=np.int64)
-                    else:
-                        value = 0.
-                    getattr(self, kk)[:] = value
+                    for tt, kk in list(per_particle_vars):
+                        if kk == 'chi' or kk == 'charge_ratio' or kk == 'state':
+                            value = 1.
+                        elif kk == 'particle_id':
+                            value = np.arange(0, self._capacity, dtype=np.int64)
+                        else:
+                            value = 0.
+                        getattr(self, kk)[:] = value
 
         self._num_active_particles = -1 # To be filled in only on CPU
         self._num_lost_particles = -1 # To be filled in only on CPU
@@ -353,11 +359,14 @@ class Particles(xo.dress(ParticlesData, rename={
                                     np.array(input_kwargs[nn])))
                 else:
                     raise ValueError(
-                            'What?! This should have been intercepted before!')
+                           'What?! This should have been intercepted before!')
 
         if isinstance(self._buffer.context, xo.ContextCpu):
             # Particles always need to be organized to run on CPU
             self.reorganize()
+
+    def _bypass_linked_vars(self):
+        return BypassLinked(self)
 
     def _init_random_number_generator(self, seeds=None):
 
@@ -378,6 +387,7 @@ class Particles(xo.dress(ParticlesData, rename={
 
     def hide_lost_particles(self):
          self._lim_arrays_name = '_num_active_particles'
+         self.reorganize()
 
     def unhide_lost_particles(self):
          del(self._lim_arrays_name)
@@ -403,14 +413,15 @@ class Particles(xo.dress(ParticlesData, rename={
         n_active = np.sum(mask_active)
         n_lost = np.sum(mask_lost)
 
-        for tt, nn in self._structure['per_particle_vars']:
-            vv = getattr(self, nn)
-            vv_active = vv[mask_active]
-            vv_lost = vv[mask_lost]
+        with self._bypass_linked_vars():
+            for tt, nn in self._structure['per_particle_vars']:
+                vv = getattr(self, nn)
+                vv_active = vv[mask_active]
+                vv_lost = vv[mask_lost]
 
-            vv[:n_active] = vv_active
-            vv[n_active:n_active+n_lost] = vv_lost
-            vv[n_active+n_lost:] = LAST_INVALID_STATE
+                vv[:n_active] = vv_active
+                vv[n_active:n_active+n_lost] = vv_lost
+                vv[n_active+n_lost:] = LAST_INVALID_STATE
 
         if isinstance(self._buffer.context, xo.ContextCpu):
             self._num_active_particles = n_active
@@ -444,10 +455,11 @@ class Particles(xo.dress(ParticlesData, rename={
             assert np.isclose(getattr(self, nn), getattr(part, nn),
                     rtol=1e-14, atol=1e-14)
 
-        for tt, nn in self._structure['per_particle_vars']:
-            vv = getattr(self, nn)
-            vv_copy = getattr(part, nn)[mask_copy]
-            vv[i_start_copy:i_start_copy+n_copy] = vv_copy
+        with self._bypass_linked_vars():
+            for tt, nn in self._structure['per_particle_vars']:
+                vv = getattr(self, nn)
+                vv_copy = getattr(part, nn)[mask_copy]
+                vv[i_start_copy:i_start_copy+n_copy] = vv_copy
 
         self.particle_id[i_start_copy:i_start_copy+n_copy] = np.arange(
                                      max_id+1, max_id+1+n_copy, dtype=np.int64)
@@ -468,19 +480,37 @@ class Particles(xo.dress(ParticlesData, rename={
 
     @property
     def delta(self):
-        return self._delta
+        return self._buffer.context.linked_array_type.from_array(
+                                        self._delta,
+                                        mode='setitem_from_container',
+                                        container=self,
+                                        container_setitem_name='_delta_setitem')
+
+    @delta.setter
+    def delta(self, value):
+        self.delta[:] = value
+
+    def _delta_setitem(self, indx, val):
+        self._delta[indx] = val
+        self.update_delta(self._delta)
 
     @property
     def psigma(self):
-        return self._psigma
+        return self._buffer.context.linked_array_type.from_array(
+                                            self._psigma, mode='readonly',
+                                            container=self)
 
     @property
     def rvv(self):
-        return self._rvv
+        return self._buffer.context.linked_array_type.from_array(
+                                            self._rvv, mode='readonly',
+                                            container=self)
 
     @property
     def rpp(self):
-        return self._rpp
+        return self._buffer.context.linked_array_type.from_array(
+                                            self._rpp, mode='readonly',
+                                            container=self)
 
     @property
     def ptau(self):
@@ -514,12 +544,12 @@ class Particles(xo.dress(ParticlesData, rename={
         one_plus_delta = delta + 1.
         rvv = one_plus_delta / ( 1. + ptau_beta0 )
 
-        self.delta = delta
-        self.psigma = psigma
-        self.zeta *= rvv / self.rvv
+        self._delta = delta
+        self._psigma = psigma
+        self._zeta *= rvv / self.rvv
 
-        self.rvv = rvv
-        self.rpp = 1. / one_plus_delta
+        self._rvv = rvv
+        self._rpp = 1. / one_plus_delta
 
     def get_sigma_matrix(self, mask=[]):
         if len(mask) == 0:
@@ -569,10 +599,10 @@ class Particles(xo.dress(ParticlesData, rename={
         rpp    = 1. / one_plus_delta
         psigma = ptau_beta0 / ( beta0 * beta0 )
 
-        self.delta[:] = new_delta_value
-        self.rvv[:] = rvv
-        self.rpp[:] = rpp
-        self.psigma[:] = psigma
+        self._delta[:] = new_delta_value
+        self._rvv[:] = rvv
+        self._rpp[:] = rpp
+        self._psigma[:] = psigma
 
     def compare(self, particle, rel_tol=1e-6, abs_tol=1e-15):
         identical = True
@@ -699,7 +729,7 @@ def gen_local_particle_api(mode='no_local_copy', freeze_vars=()):
         src_lines.append('}')
     src_setters = '\n'.join(src_lines)
 
-    # Getters 
+    # Getters
     src_lines=[]
     for tt, vv in size_vars + scalar_vars:
         src_lines.append('/*gpufun*/')

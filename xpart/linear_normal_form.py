@@ -5,9 +5,9 @@ from .particles import Particles
 
 def healy_symplectify(M):
     # https://accelconf.web.cern.ch/e06/PAPERS/WEPCH152.PDF
-    print("Symplectifying linear One-Turn-Map...")
+    #print("Symplectifying linear One-Turn-Map...")
 
-    print("Before symplectifying: det(M) = {}".format(np.linalg.det(M)))
+    #print("Before symplectifying: det(M) = {}".format(np.linalg.det(M)))
     I = np.identity(6)
 
     S = np.array(
@@ -31,10 +31,10 @@ def healy_symplectify(M):
         V_else = np.matmul(S, np.matmul(I + M, np.linalg.inv(I - M)))
         W_else = (V_else + V_else.T) / 2
         M_new = -np.matmul(
-            I + np.matmul(S, W_else), np.linalg(I - np.matmul(S, W_else))
+            I + np.matmul(S, W_else), np.linalg.det(I - np.matmul(S, W_else))
         )
 
-    print("After symplectifying: det(M) = {}".format(np.linalg.det(M_new)))
+    #print("After symplectifying: det(M) = {}".format(np.linalg.det(M_new)))
     return M_new
 
 S = np.array([[0., 1., 0., 0., 0., 0.],
@@ -52,7 +52,7 @@ def Rot2D(mu):
     return np.array([[ np.cos(mu), np.sin(mu)],
                      [-np.sin(mu), np.cos(mu)]])
 
-def compute_linear_normal_form(M, symplectify=True, tol_det_M=1e-3):
+def compute_linear_normal_form(M, symplectify=True, tol_det_M=0.05):
 
     if np.abs(np.linalg.det(M)-1) > tol_det_M:
         raise ValueError('The determinant of M is out tolerance.')

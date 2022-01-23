@@ -298,9 +298,9 @@ class Particles(xo.dress(ParticlesData, rename={
                 part_dict = _pyparticles_to_xpart_dict(pyparticles)
                 if ('_capacity' in kwargs.keys() and
                          kwargs['_capacity'] is not None):
-                    assert kwargs['_capacity'] >= part_dict['_capacity']
+                    assert kwargs['_capacity'] >= part_dict['_num_particles']
                 else:
-                    kwargs['_capacity'] = part_dict['_capacity']
+                    kwargs['_capacity'] = part_dict['_num_particles']
             else:
                 pyparticles = None
                 if '_capacity' not in kwargs.keys():
@@ -350,20 +350,24 @@ class Particles(xo.dress(ParticlesData, rename={
         for nn in part_energy_varnames():
             vvv = self._buffer.context.nparray_from_context_array(getattr(self, nn))
             if nn in input_kwargs.keys():
-                if np.allclose(vvv, input_kwargs[nn], rtol=0, atol=1e-13):
-                    if np.isscalar(input_kwargs[nn]):
-                        getattr(self, "_"+nn)[:] = input_kwargs[nn]
-                    else:
-                        getattr(self, "_"+nn)[:] = (
-                                context.nparray_to_context_array(
-                                    np.array(input_kwargs[nn])))
+                if hasattr(input_kwargs[nn], '__len__'):
+                    ll = len(input_kwargs[nn]) # in case there is unallocated space
                 else:
-                    raise ValueError(
-                           'What?! This should have been intercepted before!')
+                    ll = len(vvv)
+
+                if np.isscalar(input_kwargs[nn]):
+                    getattr(self, "_"+nn)[:] = input_kwargs[nn]
+                else:
+                    getattr(self, "_"+nn)[:ll] = (
+                            context.nparray_to_context_array(
+                                np.array(input_kwargs[nn])))
 
         if isinstance(self._buffer.context, xo.ContextCpu):
             # Particles always need to be organized to run on CPU
-            self.reorganize()
+            if '_no_reorganize' in kwargs.keys() and kwargs['_no_reorganize']:
+                pass
+            else:
+                self.reorganize()
 
     def _bypass_linked_vars(self):
         return BypassLinked(self)
@@ -886,8 +890,8 @@ def _pyparticles_to_xpart_dict(pyparticles):
     lll = [len(vv) for kk, vv in dct.items() if hasattr(vv, '__len__')]
     lll = list(set(lll))
     assert len(set(lll) - {1}) <= 1
-    _capacity = max(lll)
-    out['_capacity'] = _capacity
+    _num_particles = max(lll)
+    out['_num_particles'] = _num_particles
 
     for tt, kk in scalar_vars:
         val = dct[kk]
@@ -900,8 +904,8 @@ def _pyparticles_to_xpart_dict(pyparticles):
 
         val_py = dct[kk]
 
-        if _capacity > 1 and len(val_py)==1:
-            temp = np.zeros(int(_capacity), dtype=tt._dtype)
+        if _num_particles > 1 and len(val_py)==1:
+            temp = np.zeros(int(_num_particles), dtype=tt._dtype)
             temp += val_py[0]
             val_py = temp
 

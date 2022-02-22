@@ -778,6 +778,7 @@ void LocalParticle_add_to_energy(LocalParticle* part, double delta_energy, int p
     double const beta0 = LocalParticle_get_beta0(part);
     double const delta_beta0 = LocalParticle_get_delta(part) * beta0;
 
+    //printf("adding to energy:  %.6e\\n", delta_energy);
     double const ptau_beta0 =
         delta_energy / LocalParticle_get_energy0(part) +
         sqrt( delta_beta0 * delta_beta0 + 2.0 * delta_beta0 * beta0

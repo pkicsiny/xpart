@@ -3,9 +3,10 @@ import logging
 import numpy as np
 
 import xobjects as xo
+from xtrack.linear_normal_form import compute_linear_normal_form
 
-from .linear_normal_form import compute_linear_normal_form
 from .particles import Particles
+
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,8 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
                       weight=None,
                       particle_class=Particles,
                       co_search_settings=None,
-                      steps_r_matrix=None
+                      steps_r_matrix=None,
+                      symplectify=False
                     ):
 
     """
@@ -116,6 +118,10 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
     if (particle_ref is not None and particle_on_co is not None):
         raise ValueError("`particle_ref` and `particle_on_co`"
                 " cannot be provided at the same time")
+
+    if particle_on_co is None and particle_ref is None:
+        if tracker is not None:
+            particle_ref = tracker.particle_ref
 
     if particle_ref is None:
         assert particle_on_co is not None, (
@@ -191,7 +197,7 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
             particle_on_co = tracker.find_closed_orbit(
                 particle_co_guess=Particles(
                     x=0, px=0, y=0, py=0, zeta=0, delta=0.,
-                    **ref_dict), 
+                    **ref_dict),
                 co_search_settings=co_search_settings)
         else:
             assert particle_on_co._capacity == 1
@@ -226,7 +232,9 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
             y_norm_scaled = y_norm
             py_norm_scaled = py_norm
 
-        WW, WWinv, Rot = compute_linear_normal_form(R_matrix)
+        WW, WWinv, Rot = compute_linear_normal_form(R_matrix,
+                                                    symplectify=symplectify)
+
 
         # Transform long. coordinates to normalized space
         XX_long = np.zeros(shape=(6, num_particles), dtype=np.float64)

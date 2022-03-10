@@ -47,7 +47,9 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
                       particle_class=Particles,
                       co_search_settings=None,
                       steps_r_matrix=None,
-                      symplectify=False
+                      symplectify=False,
+                      at_element=None,
+                      match_at_s=None
                     ):
 
     """
@@ -109,6 +111,13 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
           transverse normalized emittances used to rescale the provided
           transverse normalized coordinates (x, px, y, py).
         - weight: weights to be assigned to the particles.
+        - at_element: location within the line at which particles are generated.
+          It can be an index or an element name. It can be given  only if
+          `at_tracker` is provided and `transverse_mode` is "normalized".
+        - match_at_s: s coordinate of a location in the drifts downstream the
+          specified `at_element` at which the particles are generated before
+          being backdrifted to the location specified by `at_element`.
+          No active element can be present in between.
         - _context: xobjects context in which the particle object is allocated.
 
     """
@@ -149,6 +158,7 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
     if tracker is not None and tracker.iscollective:
         logger.warning('Ignoring collective elements in particles generation.')
         tracker = tracker._supertracker
+
 
     if zeta is None:
         zeta = 0
@@ -191,6 +201,38 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
     }
     part_dict = ref_dict.copy()
 
+    if at_element is not None or match_at_s is not None:
+        # Only this case is covered if not starting at element 0
+        assert tracker is not None
+        assert mode == 'normalized_transverse'
+        if isinstance(at_element, str):
+            at_element = tracker.line.element_names.index(at_element)
+
+    if match_at_s is not None:
+        import xtrack as xt
+        assert at_element is not None, (
+            'If `match_at_s` is provided, `at_element` needs to be provided and'
+            'needs to correspond to the corresponding element in the sequence'
+        )
+        # Match at a position where there is no marker and backtrack to the previous marker
+        expected_at_element = np.where(np.array(
+            tracker.line.get_s_elements())<=match_at_s)[0][-1]
+        assert at_element == expected_at_element or (
+                at_element < expected_at_element and
+                      all([isinstance(tracker.line.element_dict[nn], xt.Drift)
+                for nn in tracker.line.element_names[at_element:expected_at_element]])), (
+            "`match_at_s` can only be placed in the drifts upstream of the "
+            "specified `at_element`. No active element can be present in between."
+            )
+        (tracker_rmat, _
+            ) = xt.twiss_from_tracker._build_auxiliary_tracker_with_extra_markers(
+                tracker=tracker, at_s=[match_at_s], marker_prefix='xpart_rmat_')
+        at_element_tracker_rmat = tracker_rmat.line.element_names.index(
+                                                                 'xpart_rmat_0')
+    else:
+        tracker_rmat = tracker
+        at_element_tracker_rmat = at_element
+
     if mode == 'normalized_transverse':
         if particle_on_co is None:
             assert tracker is not None
@@ -205,8 +247,20 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
         if not isinstance(particle_on_co._buffer.context, xo.ContextCpu):
             particle_on_co = particle_on_co.copy(_context=xo.ContextCpu())
 
+        assert particle_on_co.at_element[0] == 0
+        assert particle_on_co.s[0] == 0
+        assert particle_on_co.state[0] == 1
+
+        if at_element_tracker_rmat is not None:
+            # Match in a different position of the line
+            assert at_element_tracker_rmat > 0
+            part_co_ctx = particle_on_co.copy(_context=tracker_rmat._buffer.context)
+            tracker_rmat.track(part_co_ctx, num_elements=at_element_tracker_rmat)
+            particle_on_co = part_co_ctx.copy(_context=xo.ContextCpu())
+
         if R_matrix is None:
-            R_matrix = tracker.compute_one_turn_matrix_finite_differences(
+            # R matrix at location defined by particle_on_co.at_element
+            R_matrix = tracker_rmat.compute_one_turn_matrix_finite_differences(
                 particle_on_co=particle_on_co, steps_r_matrix=steps_r_matrix)
 
         num_particles = _check_lengths(num_particles=num_particles,
@@ -309,6 +363,23 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
     particles.particle_id = particles._buffer.context.nparray_to_context_array(
                                    np.arange(0, num_particles, dtype=np.int64))
     if weight is not None:
-        particles.weight[:] = weight
+        particles.weight[:num_particles] = weight
+
+    if match_at_s is not None:
+        # Backtrack to at_element
+        length_aux_drift = -match_at_s + tracker.line.get_s_position(at_element)
+        assert length_aux_drift <= 0
+        auxdrift = xt.Drift(length=length_aux_drift,
+                            _context=tracker._buffer.context)
+        auxdrift.track(particles)
+
+    if at_element is not None:
+        if match_at_s is not None:
+            particles.s[:num_particles] = particle_on_co.s[0] + length_aux_drift
+        else:
+            assert particle_on_co.at_element[0] == at_element
+            particles.s[:num_particles] = particle_on_co.s[0]
+        particles.at_element[:num_particles] = at_element
+        particles.start_tracking_at_element = at_element
 
     return particles

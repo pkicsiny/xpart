@@ -99,7 +99,12 @@ ParticlesData.custom_kernels = {
             xo.Arg(xo.Int32, name='n_init')],
         n_threads='n_init')}
 
-
+def _contains_nan(arr, ctx):
+    if isinstance(ctx, xo.ContextPyopencl):
+        nparr = ctx.nparray_from_context_array(arr)
+        return np.any(np.isnan(nparr))
+    else:
+        return ctx.nplike_lib.any(ctx.nplike_lib.isnan(arr))
 
 class Particles(xo.dress(ParticlesData, rename={
                              'delta': '_delta',
@@ -241,9 +246,6 @@ class Particles(xo.dress(ParticlesData, rename={
                 pass
             else:
                 self.reorganize()
-
-
-
 
     def to_dict(self, copy_to_cpu=True,
                 remove_underscored=None,
@@ -458,9 +460,10 @@ class Particles(xo.dress(ParticlesData, rename={
          context.kernels.Particles_initialize_rand_gen(particles=self,
              seeds=seeds_dev, n_init=self._capacity)
 
-    def hide_lost_particles(self):
+    def hide_lost_particles(self, _assume_reorganized=False):
          self._lim_arrays_name = '_num_active_particles'
-         self.reorganize()
+         if not _assume_reorganized:
+            self.reorganize()
 
     def unhide_lost_particles(self):
          del(self._lim_arrays_name)
@@ -501,7 +504,7 @@ class Particles(xo.dress(ParticlesData, rename={
             self._num_lost_particles = n_lost
 
         if restore_hidden:
-            self.hide_lost_particles()
+            self.hide_lost_particles(_assume_reorganized=True)
 
         return n_active, n_lost
 
@@ -551,6 +554,55 @@ class Particles(xo.dress(ParticlesData, rename={
         self.beta0 = self.p0c / energy0
         self.gamma0 = energy0 / self.mass0
 
+    def _contains_lost_or_unallocated_particles(self):
+        ctx = self._buffer.context
+        # TODO: check and handle behavior with hidden lost particles
+        if isinstance(ctx, xo.ContextPyopencl):
+            npstate = ctx.nparray_from_context_array(self.state)
+            return np.any(npstate <= 0)
+        else:
+            return ctx.nplike_lib.any(self.state <= 0)
+
+
+    def update_delta(self, new_delta_value):
+
+        ctx = self._buffer.context
+
+        if (self._contains_lost_or_unallocated_particles()
+                or _contains_nan(new_delta_value, ctx)):
+            if isinstance(self._buffer.context, xo.ContextPyopencl):
+                raise NotImplementedError # Because masking of arrays does not work in pyopencl
+            mask = ((self.state > 0) & (~ctx.nplike_lib.isnan(new_delta_value)))
+        else:
+            mask = None
+
+        if mask is not None:
+            beta0 = self.beta0[mask]
+            new_delta_value = new_delta_value[mask]
+        else:
+            beta0 = self.beta0
+
+        new_delta_beta0 = new_delta_value * beta0
+        new_ptau_beta0 = (new_delta_beta0 * new_delta_beta0
+                        + 2. * new_delta_beta0 * beta0 + 1.)**0.5 - 1.
+
+        new_one_plus_delta = 1. + new_delta_value
+        new_rvv = ( new_one_plus_delta ) / ( 1. + new_ptau_beta0 )
+        new_rpp = 1. / new_one_plus_delta
+        new_psigma = new_ptau_beta0 / ( beta0 * beta0 )
+
+        if mask is not None:
+            self._delta[mask] = new_delta_value
+            self._rvv[mask] = new_rvv
+            self._psigma[mask] = new_psigma
+            self._rpp[mask] = new_rpp
+        else:
+            self._delta = new_delta_value
+            self._rvv = new_rvv
+            self._psigma = new_psigma
+            self._rpp = new_rpp
+
+
     @property
     def delta(self):
         return self._buffer.context.linked_array_type.from_array(
@@ -564,14 +616,75 @@ class Particles(xo.dress(ParticlesData, rename={
         self.delta[:] = value
 
     def _delta_setitem(self, indx, val):
-        self._delta[indx] = val
-        self.update_delta(self._delta)
+        ctx = self._buffer.context
+        temp_delta = ctx.zeros(shape=self._delta.shape, dtype=np.float64)
+        temp_delta[:] = np.nan
+        temp_delta[indx] = val
+        self.update_delta(temp_delta)
+
+    def update_psigma(self, new_psigma):
+
+        ctx = self._buffer.context
+
+        if (self._contains_lost_or_unallocated_particles()
+                or _contains_nan(new_psigma, ctx)):
+            if isinstance(self._buffer.context, xo.ContextPyopencl):
+                raise NotImplementedError # Because masking of arrays does not work in pyopencl
+            mask = ((self.state > 0) & (~ctx.nplike_lib.isnan(new_psigma)))
+        else:
+            mask = None
+
+        if mask is not None:
+            beta0 = self.beta0[mask]
+            p0c = self.p0c[mask]
+            zeta = self.zeta[mask]
+            new_psigma = new_psigma[mask]
+            old_rvv = self._rvv[mask]
+        else:
+            beta0 = self.beta0
+            p0c = self.p0c
+            zeta = self.zeta
+            old_rvv = self._rvv
+
+        ptau = new_psigma * beta0
+        irpp = (ptau*ptau + 2*ptau/beta0 +1)**0.5
+        new_rpp = 1./irpp
+
+        new_rvv = irpp/(1 + beta0*ptau)
+        zeta *= new_rvv/old_rvv
+
+        new_delta =  irpp - 1.
+
+        if mask is not None:
+            self._delta[mask] = new_delta
+            self._rvv[mask] = new_rvv
+            self._psigma[mask] = new_psigma
+            self._rpp[mask] = new_rpp
+            self.zeta[mask] = zeta
+        else:
+            self._delta = new_delta
+            self._rvv = new_rvv
+            self._psigma = new_psigma
+            self._rpp = new_rpp
+            self.zeta = zeta
+
+    def _psigma_setitem(self, indx, val):
+        ctx = self._buffer.context
+        temp_psigma = ctx.zeros(shape=self._psigma.shape, dtype=np.float64)
+        temp_psigma[:] = np.nan
+        temp_psigma[indx] = val
+        self.update_psigma(temp_psigma)
 
     @property
     def psigma(self):
         return self._buffer.context.linked_array_type.from_array(
-                                            self._psigma, mode='readonly',
-                                            container=self)
+                                        self._psigma,
+                                        mode='setitem_from_container',
+                                        container=self,
+                                        container_setitem_name='_psigma_setitem')
+    @psigma.setter
+    def psigma(self, value):
+        self.psigma[:] = value
 
     @property
     def rvv(self):
@@ -636,20 +749,7 @@ class Particles(xo.dress(ParticlesData, rename={
                 continue
             getattr(self, kk)[index] = part_dict[kk][0]
 
-    def update_delta(self, new_delta_value):
-        beta0 = self.beta0
-        delta_beta0 = new_delta_value * beta0
-        ptau_beta0  = ( delta_beta0 * delta_beta0 +
-                                2. * delta_beta0 * beta0 + 1. )**0.5 - 1.
-        one_plus_delta = 1. + new_delta_value
-        rvv    = ( one_plus_delta ) / ( 1. + ptau_beta0 )
-        rpp    = 1. / one_plus_delta
-        psigma = ptau_beta0 / ( beta0 * beta0 )
 
-        self._delta[:] = new_delta_value
-        self._rvv[:] = rvv
-        self._rpp[:] = rpp
-        self._psigma[:] = psigma
 
 def _str_in_list(string, str_list):
 

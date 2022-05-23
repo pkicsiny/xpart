@@ -38,7 +38,7 @@ scalar_vars = (
     )
 
 part_energy_vars = (
-    (xo.Float64, 'psigma'),
+    (xo.Float64, 'ptau'),
     (xo.Float64, 'delta'),
     (xo.Float64, 'rpp'),
     (xo.Float64, 'rvv'),
@@ -108,7 +108,7 @@ def _contains_nan(arr, ctx):
 
 class Particles(xo.dress(ParticlesData, rename={
                              'delta': '_delta',
-                             'psigma': '_psigma',
+                             'ptau': '_ptau',
                              'rvv': '_rvv',
                              'rpp': '_rpp'})):
 
@@ -133,15 +133,18 @@ class Particles(xo.dress(ParticlesData, rename={
              - p0c [eV]: Reference momentum
              - energy0 [eV]: Reference energy
              - gamma0 [1]:  Reference relativistic gamma
-             - beta0 [1]:  Reference relativistix beta
+             - beta0 [1]:  Reference relativistic beta
+             - mass_ratio [1]:  mass/mass0 (this is used to track particled of
+                                different species. Note that mass is the rest mass
+                                of the considered particle species and not the
+                                relativistic mass)
              - chi [1]:  q/ q0 * m0/m = qratio / mratio
-             - mass_ratio [1]:  mass/mass0
              - charge_ratio [1]:  q / q0
              - particle_id [int]: Identifier of the particle
              - at_turn [int]:  Number of tracked turns
-             - state [int]:  It is ``0`` if the particle is lost, ``1`` otherwise
-             - test [int]:  It is ``1`` if the particle is a test particle, ``0`` otherwise
-             - slice_id [int]: The ID of the longitudinal slice the particle belongs to. ``0`` by default.
+             - state [int]: It is <= 0 if the particle is lost, > 0 otherwise
+                            (different values are used to record information
+                            on how the particle is lost or generated).
              - weight [int]:  Particle weight in number of particles
                               (for collective sims.)
              - at_element [int]: Identifier of the last element through which
@@ -187,6 +190,9 @@ class Particles(xo.dress(ParticlesData, rename={
             kwargs.update(
                     {kk: kwargs['_capacity'] for tt, kk in per_particle_vars})
 
+            if 'psigma' in kwargs.keys():
+                del(kwargs['psigma']) # handled in part_dict
+
             # Initialize xobject
             self.xoinitialize(**kwargs)
 
@@ -221,31 +227,31 @@ class Particles(xo.dress(ParticlesData, rename={
                             value = 0.
                         getattr(self, kk)[:] = value
 
-        self._num_active_particles = -1 # To be filled in only on CPU
-        self._num_lost_particles = -1 # To be filled in only on CPU
+            self._num_active_particles = -1 # To be filled in only on CPU
+            self._num_lost_particles = -1 # To be filled in only on CPU
 
-        # Force values provided by user if compatible
-        for nn in part_energy_varnames():
-            vvv = self._buffer.context.nparray_from_context_array(getattr(self, nn))
-            if nn in input_kwargs.keys():
-                if hasattr(input_kwargs[nn], '__len__'):
-                    ll = len(input_kwargs[nn]) # in case there is unallocated space
+            # Force values provided by user if compatible
+            for nn in part_energy_varnames():
+                vvv = self._buffer.context.nparray_from_context_array(getattr(self, nn))
+                if nn in input_kwargs.keys():
+                    if hasattr(input_kwargs[nn], '__len__'):
+                        ll = len(input_kwargs[nn]) # in case there is unallocated space
+                    else:
+                        ll = len(vvv)
+
+                    if np.isscalar(input_kwargs[nn]):
+                        getattr(self, "_"+nn)[:] = input_kwargs[nn]
+                    else:
+                        getattr(self, "_"+nn)[:ll] = (
+                                context.nparray_to_context_array(
+                                    np.array(input_kwargs[nn])))
+
+            if isinstance(self._buffer.context, xo.ContextCpu):
+                # Particles always need to be organized to run on CPU
+                if '_no_reorganize' in kwargs.keys() and kwargs['_no_reorganize']:
+                    pass
                 else:
-                    ll = len(vvv)
-
-                if np.isscalar(input_kwargs[nn]):
-                    getattr(self, "_"+nn)[:] = input_kwargs[nn]
-                else:
-                    getattr(self, "_"+nn)[:ll] = (
-                            context.nparray_to_context_array(
-                                np.array(input_kwargs[nn])))
-
-        if isinstance(self._buffer.context, xo.ContextCpu):
-            # Particles always need to be organized to run on CPU
-            if '_no_reorganize' in kwargs.keys() and kwargs['_no_reorganize']:
-                pass
-            else:
-                self.reorganize()
+                    self.reorganize()
 
     def to_dict(self, copy_to_cpu=True,
                 remove_underscored=None,
@@ -276,7 +282,7 @@ class Particles(xo.dress(ParticlesData, rename={
 
         dct = Particles.__base__.to_dict(p_for_dict)
         dct['delta'] = p_for_dict.delta
-        dct['psigma'] = p_for_dict.psigma
+        dct['ptau'] = p_for_dict.ptau
         dct['rvv'] = p_for_dict.rvv
         dct['rpp'] = p_for_dict.rpp
         dct['start_tracking_at_element'] = p_for_dict.start_tracking_at_element
@@ -289,7 +295,7 @@ class Particles(xo.dress(ParticlesData, rename={
                     del(dct[kk])
 
         if remove_redundant_variables:
-            for kk in ['psigma', 'rpp', 'rvv', 'gamma0', 'beta0']:
+            for kk in ['ptau', 'rpp', 'rvv', 'gamma0', 'beta0']:
                 del(dct[kk])
 
         return dct
@@ -445,33 +451,66 @@ class Particles(xo.dress(ParticlesData, rename={
 
     def _init_random_number_generator(self, seeds=None):
 
-         self.compile_custom_kernels(only_if_needed=True)
+        self.compile_custom_kernels(only_if_needed=True)
 
-         if seeds is None:
+        if seeds is None:
             seeds = np.random.randint(low=1, high=4e9,
                         size=self._capacity, dtype=np.uint32)
-         else:
+        else:
             assert len(seeds) == self._capacity
             if not hasattr(seeds, 'dtype') or seeds.dtype != np.uint32:
                 seeds = np.array(seeds, dtype=np.uint32)
 
-         context = self._buffer.context
-         seeds_dev = context.nparray_to_context_array(seeds)
-         context.kernels.Particles_initialize_rand_gen(particles=self,
+        context = self._buffer.context
+        seeds_dev = context.nparray_to_context_array(seeds)
+        context.kernels.Particles_initialize_rand_gen(particles=self,
              seeds=seeds_dev, n_init=self._capacity)
 
     def hide_lost_particles(self, _assume_reorganized=False):
-         self._lim_arrays_name = '_num_active_particles'
-         if not _assume_reorganized:
+        self._lim_arrays_name = '_num_active_particles'
+        if not _assume_reorganized:
             self.reorganize()
 
     def unhide_lost_particles(self):
-         del(self._lim_arrays_name)
+        del(self._lim_arrays_name)
 
     @property
     def lost_particles_are_hidden(self):
-         return (hasattr(self, '_lim_arrays_name') and
+        return (hasattr(self, '_lim_arrays_name') and
                  self._lim_arrays_name == '_num_active_particles')
+
+    def sort(self, by='particle_id', interleave_lost_particles=False):
+
+        if not isinstance(self._buffer.context, xo.ContextCpu):
+            raise NotImplementedError('Sorting only works on CPU for now')
+
+        if self.lost_particles_are_hidden:
+            restore_hidden = True
+            self.unhide_lost_particles()
+        else:
+            restore_hidden = False
+
+        n_active, n_lost = self.reorganize()
+
+        n_used = n_active + n_lost
+        sort_key_var = getattr(self, by)[:n_used].copy()
+        if not(interleave_lost_particles):
+            max_id_active = np.max(self.particle_id[:n_active])
+            sort_key_var[n_active:] = 10 + max_id_active + sort_key_var[n_active:]
+
+        sorted_index = np.argsort(sort_key_var)
+
+        with self._bypass_linked_vars():
+            for tt, nn in self._structure['per_particle_vars']:
+                vv = getattr(self, nn)
+                vv[:n_used] = vv[:n_used][sorted_index]
+
+        if interleave_lost_particles:
+            self._num_active_particles = -2
+            self._num_lost_particles = -2
+        elif restore_hidden:
+            self.hide_lost_particles(_assume_reorganized=True)
+
 
     def reorganize(self):
         assert not isinstance(self._buffer.context, xo.ContextPyopencl), (
@@ -589,17 +628,17 @@ class Particles(xo.dress(ParticlesData, rename={
         new_one_plus_delta = 1. + new_delta_value
         new_rvv = ( new_one_plus_delta ) / ( 1. + new_ptau_beta0 )
         new_rpp = 1. / new_one_plus_delta
-        new_psigma = new_ptau_beta0 / ( beta0 * beta0 )
+        new_ptau = new_ptau_beta0 / beta0
 
         if mask is not None:
             self._delta[mask] = new_delta_value
             self._rvv[mask] = new_rvv
-            self._psigma[mask] = new_psigma
+            self._ptau[mask] = new_ptau
             self._rpp[mask] = new_rpp
         else:
             self._delta = new_delta_value
             self._rvv = new_rvv
-            self._psigma = new_psigma
+            self._ptau = new_ptau
             self._rpp = new_rpp
 
 
@@ -622,15 +661,15 @@ class Particles(xo.dress(ParticlesData, rename={
         temp_delta[indx] = val
         self.update_delta(temp_delta)
 
-    def update_psigma(self, new_psigma):
+    def update_ptau(self, new_ptau):
 
         ctx = self._buffer.context
 
         if (self._contains_lost_or_unallocated_particles()
-                or _contains_nan(new_psigma, ctx)):
+                or _contains_nan(new_ptau, ctx)):
             if isinstance(self._buffer.context, xo.ContextPyopencl):
                 raise NotImplementedError # Because masking of arrays does not work in pyopencl
-            mask = ((self.state > 0) & (~ctx.nplike_lib.isnan(new_psigma)))
+            mask = ((self.state > 0) & (~ctx.nplike_lib.isnan(new_ptau)))
         else:
             mask = None
 
@@ -638,7 +677,7 @@ class Particles(xo.dress(ParticlesData, rename={
             beta0 = self.beta0[mask]
             p0c = self.p0c[mask]
             zeta = self.zeta[mask]
-            new_psigma = new_psigma[mask]
+            new_ptau = new_ptau[mask]
             old_rvv = self._rvv[mask]
         else:
             beta0 = self.beta0
@@ -646,7 +685,7 @@ class Particles(xo.dress(ParticlesData, rename={
             zeta = self.zeta
             old_rvv = self._rvv
 
-        ptau = new_psigma * beta0
+        ptau = new_ptau
         irpp = (ptau*ptau + 2*ptau/beta0 +1)**0.5
         new_rpp = 1./irpp
 
@@ -658,33 +697,33 @@ class Particles(xo.dress(ParticlesData, rename={
         if mask is not None:
             self._delta[mask] = new_delta
             self._rvv[mask] = new_rvv
-            self._psigma[mask] = new_psigma
+            self._ptau[mask] = new_ptau
             self._rpp[mask] = new_rpp
             self.zeta[mask] = zeta
         else:
             self._delta = new_delta
             self._rvv = new_rvv
-            self._psigma = new_psigma
+            self._ptau = new_ptau
             self._rpp = new_rpp
             self.zeta = zeta
 
-    def _psigma_setitem(self, indx, val):
+    def _ptau_setitem(self, indx, val):
         ctx = self._buffer.context
-        temp_psigma = ctx.zeros(shape=self._psigma.shape, dtype=np.float64)
-        temp_psigma[:] = np.nan
-        temp_psigma[indx] = val
-        self.update_psigma(temp_psigma)
+        temp_ptau = ctx.zeros(shape=self._ptau.shape, dtype=np.float64)
+        temp_ptau[:] = np.nan
+        temp_ptau[indx] = val
+        self.update_ptau(temp_ptau)
 
     @property
-    def psigma(self):
+    def ptau(self):
         return self._buffer.context.linked_array_type.from_array(
-                                        self._psigma,
+                                        self._ptau,
                                         mode='setitem_from_container',
                                         container=self,
-                                        container_setitem_name='_psigma_setitem')
-    @psigma.setter
-    def psigma(self, value):
-        self.psigma[:] = value
+                                        container_setitem_name='_ptau_setitem')
+    @ptau.setter
+    def ptau(self, value):
+        self.ptau[:] = value
 
     @property
     def rvv(self):
@@ -699,19 +738,12 @@ class Particles(xo.dress(ParticlesData, rename={
                                             container=self)
 
     @property
-    def ptau(self):
-        return (
-            np.sqrt(self.delta ** 2 + 2 * self.delta + 1 / self.beta0 ** 2)
-            - 1 / self.beta0
-        )
-
-    @property
     def energy0(self):
         return np.sqrt( self.p0c * self.p0c + self.mass0 * self.mass0 )
 
     @property
     def energy(self):
-        return self.energy0 + self.psigma * self.p0c * self.beta0 # eV
+        return self.energy0 + self.ptau * self.p0c  # eV
 
     def add_to_energy(self, delta_energy):
         beta0 = self.beta0.copy()
@@ -723,14 +755,13 @@ class Particles(xo.dress(ParticlesData, rename={
                     + 1. ) - 1.)
 
         ptau   = ptau_beta0 / beta0
-        psigma = ptau / beta0
-        delta = np.sqrt( ptau * ptau + 2. * psigma + 1 ) - 1
+        delta = np.sqrt( ptau * ptau + 2. * ptau / beta0 + 1 ) - 1
 
         one_plus_delta = delta + 1.
         rvv = one_plus_delta / ( 1. + ptau_beta0 )
 
         self._delta = delta
-        self._psigma = psigma
+        self._ptau = ptau
         self._zeta *= rvv / self.rvv
 
         self._rvv = rvv
@@ -748,6 +779,8 @@ class Particles(xo.dress(ParticlesData, rename={
             if kk.startswith('_rng') and kk not in part_dict.keys():
                 continue
             getattr(self, kk)[index] = part_dict[kk][0]
+
+ParticlesData._DressingClass = Particles
 
 
 
@@ -778,11 +811,21 @@ def gen_local_particle_api(mode='no_local_copy', freeze_vars=()):
     for tt, vv in per_particle_vars:
         src_lines.append('    /*gpuglmem*/ ' + tt._c_type + '* '+vv+';')
     src_lines.append(    '                 int64_t ipart;')
+    src_lines.append('    /*gpuglmem*/ int8_t* io_buffer;')
     src_lines.append('}LocalParticle;')
     src_typedef = '\n'.join(src_lines)
 
-    # Particles_to_LocalParticle
+    # Get io buffer
     src_lines = []
+    src_lines.append('''
+    /*gpufun*/
+    /*gpuglmem*/ int8_t* LocalParticle_get_io_buffer(LocalParticle* part){
+        return part->io_buffer;
+    }
+
+    ''')
+
+    # Particles_to_LocalParticle
     src_lines.append('''
     /*gpufun*/
     void Particles_to_LocalParticle(ParticlesData source,
@@ -912,11 +955,9 @@ double LocalParticle_get_energy0(LocalParticle* part){
 /*gpufun*/
 void LocalParticle_add_to_energy(LocalParticle* part, double delta_energy, int pz_only ){
 
-    double const psigma = LocalParticle_get_psigma(part);
+    double ptau = LocalParticle_get_ptau(part);
     double const beta0 = LocalParticle_get_beta0(part);
     double const p0c = LocalParticle_get_p0c(part);
-
-    double ptau = psigma * beta0;
 
     ptau += delta_energy/p0c;
 
@@ -929,7 +970,7 @@ void LocalParticle_add_to_energy(LocalParticle* part, double delta_energy, int p
     LocalParticle_scale_zeta(part,
         new_rvv / LocalParticle_get_rvv(part));
     LocalParticle_set_rvv(part, new_rvv);
-    LocalParticle_set_psigma(part, ptau/beta0);
+    LocalParticle_set_ptau(part, ptau);
 
     if (!pz_only) {
         double const old_rpp = LocalParticle_get_rpp(part);
@@ -950,13 +991,13 @@ void LocalParticle_update_delta(LocalParticle* part, double new_delta_value){
     double const one_plus_delta = 1. + new_delta_value;
     double const rvv    = ( one_plus_delta ) / ( 1. + ptau_beta0 );
     double const rpp    = 1. / one_plus_delta;
-    double const psigma = ptau_beta0 / ( beta0 * beta0 );
+    double const ptau = ptau_beta0 / beta0;
 
     LocalParticle_set_delta(part, new_delta_value);
 
     LocalParticle_set_rvv(part, rvv );
     LocalParticle_set_rpp(part, rpp );
-    LocalParticle_set_psigma(part, psigma );
+    LocalParticle_set_ptau(part, ptau );
 
 }
 

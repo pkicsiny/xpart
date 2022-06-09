@@ -115,26 +115,25 @@ class Particles(xo.dress(ParticlesData, rename={
     """
         Particle objects have the following fields:
 
-             - s [m]:  Reference accumulated pathlength
+             - s [m]:  Reference accumulated path length
              - x [m]:  Horizontal position
              - px[1]:  Px / (m/m0 * p0c) = beta_x gamma /(beta0 gamma0)
              - y [m]:  Vertical position
              - py [1]:  Py / (m/m0 * p0c)
-             - delta[1]:  Pc / (m/m0 * p0c) - 1
-             - ptau [1]:  Energy / (m/m0 * p0c) - 1
-             - psigma [1]:  ptau/beta0
-             - rvv [1]:  beta/beta0
-             - rpp [1]:  1/(1+delta) = (m/m0 * p0c) / Pc
-             - zeta [m]:  beta (s/beta0 - ct )
-             - tau [m]:
-             - sigma [m]:  s - beta0 ct = rvv * zeta
-             - mass0 [eV]:
+             - delta[1]:  (Pc m0/m - p0c) /p0c
+             - ptau [1]:  (Energy m0/m - Energy0) / p0c
+             - pzeta [1]:  ptau / beta0
+             - rvv [1]:  beta / beta0
+             - rpp [1]:  m/m0 P0c / Pc = 1/(1+delta)
+             - zeta [m]:  (s - beta0 c t )
+             - tau [m]: (s - ct)
+             - mass0 [eV]: Reference rest mass
              - q0 [e]:  Reference charge
              - p0c [eV]: Reference momentum
              - energy0 [eV]: Reference energy
              - gamma0 [1]:  Reference relativistic gamma
              - beta0 [1]:  Reference relativistic beta
-             - mass_ratio [1]:  mass/mass0 (this is used to track particled of
+             - mass_ratio [1]:  mass/mass0 (this is used to track particles of
                                 different species. Note that mass is the rest mass
                                 of the considered particle species and not the
                                 relativistic mass)
@@ -190,8 +189,16 @@ class Particles(xo.dress(ParticlesData, rename={
             kwargs.update(
                     {kk: kwargs['_capacity'] for tt, kk in per_particle_vars})
 
+            if 'pzeta' in kwargs.keys():
+                del(kwargs['pzeta']) # handled in part_dict
+
+            if 'sigma' in kwargs.keys():
+                raise NameError(
+                    '`sigma` is not supported anymore. Please use `zeta` instead.')
+
             if 'psigma' in kwargs.keys():
-                del(kwargs['psigma']) # handled in part_dict
+                raise NameError(
+                    '`psigma` is not supported anymore. Please use `pzeta` instead.')
 
             # Initialize xobject
             self.xoinitialize(**kwargs)
@@ -588,11 +595,6 @@ class Particles(xo.dress(ParticlesData, rename={
         # Behaves as python range (+1)
         return np.min(ids_active_particles), np.max(ids_active_particles)+1
 
-    def _set_p0c(self):
-        energy0 = np.sqrt(self.p0c ** 2 + self.mass0 ** 2)
-        self.beta0 = self.p0c / energy0
-        self.gamma0 = energy0 / self.mass0
-
     def _contains_lost_or_unallocated_particles(self):
         ctx = self._buffer.context
         # TODO: check and handle behavior with hidden lost particles
@@ -675,22 +677,17 @@ class Particles(xo.dress(ParticlesData, rename={
 
         if mask is not None:
             beta0 = self.beta0[mask]
-            p0c = self.p0c[mask]
             zeta = self.zeta[mask]
             new_ptau = new_ptau[mask]
-            old_rvv = self._rvv[mask]
         else:
             beta0 = self.beta0
-            p0c = self.p0c
             zeta = self.zeta
-            old_rvv = self._rvv
 
         ptau = new_ptau
         irpp = (ptau*ptau + 2*ptau/beta0 +1)**0.5
         new_rpp = 1./irpp
 
         new_rvv = irpp/(1 + beta0*ptau)
-        zeta *= new_rvv/old_rvv
 
         new_delta =  irpp - 1.
 
@@ -739,7 +736,7 @@ class Particles(xo.dress(ParticlesData, rename={
 
     @property
     def energy0(self):
-        return np.sqrt( self.p0c * self.p0c + self.mass0 * self.mass0 )
+        return ( self.p0c * self.p0c + self.mass0 * self.mass0 )**0.5
 
     @property
     def energy(self):
@@ -751,30 +748,32 @@ class Particles(xo.dress(ParticlesData, rename={
 
         ptau_beta0 = (
             delta_energy / self.energy0.copy() +
-            np.sqrt( delta_beta0 * delta_beta0 + 2.0 * delta_beta0 * beta0
-                    + 1. ) - 1.)
+            ( delta_beta0 * delta_beta0 + 2.0 * delta_beta0 * beta0
+                    + 1. )**0.5 - 1.)
 
         ptau   = ptau_beta0 / beta0
-        delta = np.sqrt( ptau * ptau + 2. * ptau / beta0 + 1 ) - 1
+        delta = ( ptau * ptau + 2. * ptau / beta0 + 1 )**0.5 - 1
 
         one_plus_delta = delta + 1.
         rvv = one_plus_delta / ( 1. + ptau_beta0 )
 
         self._delta = delta
         self._ptau = ptau
-        self._zeta *= rvv / self.rvv
 
         self._rvv = rvv
         self._rpp = 1. / one_plus_delta
 
     def set_particle(self, index, set_scalar_vars=False,
-            check_scalar_vars=True, **kwargs):
+                    **kwargs):
+        # TODO: review this function
 
         # Needed to generate consistent longitudinal variables
         pyparticles = Pyparticles(**kwargs)
         part_dict = _pyparticles_to_xpart_dict(pyparticles)
-        for tt, kk in list(scalar_vars):
-            setattr(self, kk, part_dict[kk])
+        if set_scalar_vars:
+            for tt, kk in list(scalar_vars):
+                setattr(self, kk, part_dict[kk])
+
         for tt, kk in list(per_particle_vars):
             if kk.startswith('_rng') and kk not in part_dict.keys():
                 continue
@@ -953,13 +952,11 @@ double LocalParticle_get_energy0(LocalParticle* part){
 }
 
 /*gpufun*/
-void LocalParticle_add_to_energy(LocalParticle* part, double delta_energy, int pz_only ){
+void LocalParticle_update_ptau(LocalParticle* part, double new_ptau_value){
 
-    double ptau = LocalParticle_get_ptau(part);
     double const beta0 = LocalParticle_get_beta0(part);
-    double const p0c = LocalParticle_get_p0c(part);
 
-    ptau += delta_energy/p0c;
+    double const ptau = new_ptau_value;
 
     double const irpp = sqrt(ptau*ptau + 2*ptau/beta0 +1);
 
@@ -967,18 +964,28 @@ void LocalParticle_add_to_energy(LocalParticle* part, double delta_energy, int p
     LocalParticle_set_delta(part, irpp - 1.);
 
     double const new_rvv = irpp/(1 + beta0*ptau);
-    LocalParticle_scale_zeta(part,
-        new_rvv / LocalParticle_get_rvv(part));
     LocalParticle_set_rvv(part, new_rvv);
     LocalParticle_set_ptau(part, ptau);
 
+    LocalParticle_set_rpp(part, new_rpp );
+}
+/*gpufun*/
+void LocalParticle_add_to_energy(LocalParticle* part, double delta_energy, int pz_only ){
+
+    double ptau = LocalParticle_get_ptau(part);
+    double const p0c = LocalParticle_get_p0c(part);
+
+    ptau += delta_energy/p0c;
+    double const old_rpp = LocalParticle_get_rpp(part);
+
+    LocalParticle_update_ptau(part, ptau);
+
     if (!pz_only) {
-        double const old_rpp = LocalParticle_get_rpp(part);
+        double const new_rpp = LocalParticle_get_rpp(part);
         double const f = old_rpp / new_rpp;
         LocalParticle_scale_px(part, f);
         LocalParticle_scale_py(part, f);
     }
-    LocalParticle_set_rpp(part, new_rpp );
 }
 
 /*gpufun*/
@@ -1007,6 +1014,7 @@ void LocalParticle_update_p0c(LocalParticle* part, double new_p0c_value){
     double const mass0 = LocalParticle_get_mass0(part);
     double const old_p0c = LocalParticle_get_p0c(part);
     double const old_delta = LocalParticle_get_delta(part);
+    double const old_beta0 = LocalParticle_get_beta0(part);
 
     double const ppc = old_p0c * old_delta + old_p0c;
     double const new_delta = (ppc - new_p0c_value)/new_p0c_value;
@@ -1023,6 +1031,26 @@ void LocalParticle_update_p0c(LocalParticle* part, double new_p0c_value){
 
     LocalParticle_scale_px(part, old_p0c/new_p0c_value);
     LocalParticle_scale_py(part, old_p0c/new_p0c_value);
+
+    LocalParticle_scale_zeta(part, new_beta0/old_beta0);
+
+}
+
+/*gpufun*/
+double LocalParticle_get_pzeta(LocalParticle* part){
+
+    double const ptau = LocalParticle_get_ptau(part);
+    double const beta0 = LocalParticle_get_beta0(part);
+
+    return ptau/beta0;
+
+}
+
+/*gpufun*/
+void LocalParticle_update_pzeta(LocalParticle* part, double new_pzeta_value){
+
+    double const beta0 = LocalParticle_get_beta0(part);
+    LocalParticle_update_ptau(part, beta0*new_pzeta_value);
 
 }
 '''

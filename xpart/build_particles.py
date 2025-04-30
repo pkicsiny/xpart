@@ -53,10 +53,11 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
                       R_matrix=None,
                       W_matrix=None,
                       method=None,
-                      nemitt_x=None, nemitt_y=None,
+                      nemitt_x=None, nemitt_y=None,nemitt_zeta = None,
                       scale_with_transverse_norm_emitt=None,
                       weight=None,
                       s_tol=1e-6,
+                      include_collective=False,
                       **kwargs, # They are passed to the twiss
                     ):
 
@@ -124,7 +125,7 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
     zeta_norm = (zeta_norm.get() if hasattr(zeta_norm, "get") else zeta_norm)
     pzeta_norm = (pzeta_norm.get() if hasattr(pzeta_norm, "get") else pzeta_norm)
 
-    if line is not None and line.iscollective:
+    if line is not None and line.iscollective and not include_collective:
         logger.warning('Ignoring collective elements in particles generation.')
         line = line._get_non_collective_line()
 
@@ -265,7 +266,11 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
             gemitt_y = (nemitt_y / particle_ref._xobject.beta0[0]
                         / particle_ref._xobject.gamma0[0])
 
-        gemitt_zeta = 1
+        if nemitt_zeta is None:
+            gemitt_zeta = 1
+        else:
+            gemitt_zeta = (nemitt_zeta / particle_ref._xobject.beta0[0]
+                        / particle_ref._xobject.gamma0[0])
 
 
         n_constraints = sum([vv is not None for vv in [x, x_norm, px, px_norm,

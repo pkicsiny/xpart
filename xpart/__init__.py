@@ -3,10 +3,12 @@
 # Copyright (c) CERN, 2024.                 #
 # ######################################### #
 
-from xtrack.particles import Particles, PROTON_MASS_EV, ELECTRON_MASS_EV, MUON_MASS_EV, Pb208_MASS_EV, reference_from_pdg_id, enable_pyheadtail_interface, disable_pyheadtail_interface
+from xtrack.particles import (Particles, PROTON_MASS_EV, ELECTRON_MASS_EV,
+                              MUON_MASS_EV, Pb208_MASS_EV, reference_from_pdg_id,
+                              enable_pyheadtail_interface, disable_pyheadtail_interface)
 pmass = PROTON_MASS_EV  # backwards compatibility
 
-from .pdg import get_pdg_id_from_name, get_name_from_pdg_id
+from xtrack.particles.pdg import get_pdg_id_from_name, get_name_from_pdg_id
 
 from .build_particles import build_particles
 from .matched_gaussian import (generate_matched_gaussian_bunch,
@@ -18,6 +20,8 @@ from .transverse_generators import generate_2D_uniform_circular_sector
 from .transverse_generators import generate_2D_pencil
 from .transverse_generators import generate_2D_pencil_with_absolute_cut
 from .transverse_generators import generate_2D_gaussian
+from .transverse_generators import (generate_hypersphere_2D, generate_hypersphere_4D,
+                                    generate_hypersphere_6D)
 
 from .longitudinal import generate_longitudinal_coordinates
 from .longitudinal.generate_longitudinal import _characterize_line

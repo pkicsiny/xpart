@@ -33,6 +33,7 @@ def _characterize_line(line, particle_ref,
     lag_list_deg = []
     voltage_list = []
     h_list = []
+    energy_ref_increment_list = []
     found_nonlinear_longitudinal = False
     found_linear_longitudinal = False
     for ee in line.elements:
@@ -57,6 +58,17 @@ def _characterize_line(line, particle_ref,
                 found_nonlinear_longitudinal = True
             elif eecp.longitudinal_mode in ['linear_fixed_qs' , 'linear_fixed_rf']:
                 found_linear_longitudinal = True
+            if eecp.energy_ref_increment != 0:
+                energy_ref_increment_list.append(eecp.energy_ref_increment)
+        elif ee.__class__.__name__ == 'ReferenceEnergyIncrease':
+            eecp = ee.copy(_context=xo.ContextCpu())
+            if eecp.Delta_p0c != 0:
+                # valid for small energy change
+                # See Wille, The Physics of Particle Accelerators
+                # Appendix B, formula B.16 .
+                energy_ref_increment_list.append(
+                    eecp.Delta_p0c * particle_ref._xobject.beta0[0])
+
 
     found_only_linear_longitudinal = False
     if not found_linear_longitudinal and not found_nonlinear_longitudinal:
@@ -75,6 +87,12 @@ def _characterize_line(line, particle_ref,
     tw = line.twiss(
         particle_ref=particle_ref, **kwargs)
 
+    p0c_increase_from_energy_program = None
+    if line.energy_program is not None:
+        p0c_increase_from_energy_program = line.energy_program.get_p0c_increse_per_turn_at_t_s(
+                                                        line.vv['t_turn_s'])
+
+
     dct={}
     dct['T_rev'] = T_rev
     dct['freq_list'] = freq_list
@@ -86,7 +104,16 @@ def _characterize_line(line, particle_ref,
     dct['qs'] = tw['qs']
     dct['bets0'] = tw['bets0']
     dct['found_only_linear_longitudinal'] = found_only_linear_longitudinal
+    dct['energy_ref_increment_list'] = energy_ref_increment_list
+    dct['p0c_increase_from_energy_program'] = p0c_increase_from_energy_program
     return dct
+
+def get_bucket(line, **kwargs):
+    kwargs['sigma_z'] = 1.
+    return generate_longitudinal_coordinates(line=line,
+                                             engine='pyheadtail',
+                                             _only_bucket=True,
+                                             **kwargs)
 
 def generate_longitudinal_coordinates(
                                     line=None,
@@ -102,8 +129,11 @@ def generate_longitudinal_coordinates(
                                     rf_harmonic=None,
                                     rf_voltage=None,
                                     rf_phase=None,
-                                    p_increment=0.,
+                                    energy_ref_increment=None,
                                     tracker=None,
+                                    m=None,
+                                    q=None,
+                                    _only_bucket=False,
                                     **kwargs # passed to twiss
                                     ):
 
@@ -119,7 +149,7 @@ def generate_longitudinal_coordinates(
         Number of particles to be generated.
     distribution: str
         Distribution of the particles. Possible values are `gaussian` and
-        `parabolic`.
+        `parabolic` and 'binomial'.
     sigma_z: float
         RMS bunch length in meters.
     engine: str
@@ -127,6 +157,10 @@ def generate_longitudinal_coordinates(
         and `single-rf-harmonic`.
     return_matcher: bool
         If True, the matcher object is returned.
+    m : float
+        binomial parameter if distribution is 'binomial'
+    q : float
+        q-Gaussian parameter if distribution is 'qgaussian'
 
     Returns
     -------
@@ -188,9 +222,21 @@ def generate_longitudinal_coordinates(
 
     if rf_phase is None:
         assert line is not None
-        rf_phase=(np.array(dct['lag_list_deg']) - 180)/180*np.pi
+        rf_phase=(np.array(dct['lag_list_deg']))/180*np.pi
+
+    p0c_increase_from_energy_program = 0.
+    if energy_ref_increment is None and line is not None:
+        energy_ref_increment_list = dct['energy_ref_increment_list']
+        if energy_ref_increment_list:
+            energy_ref_increment = np.sum(energy_ref_increment_list)
+        p0c_increase_from_energy_program = dct['p0c_increase_from_energy_program']
 
     assert sigma_z is not None
+
+    # Compute beta0 from gamma0
+    beta0 = np.sqrt(1 - 1 / gamma0**2)
+
+    matcher = None
 
     if engine is None:
         if line is not None and dct['found_only_linear_longitudinal']:
@@ -199,15 +245,30 @@ def generate_longitudinal_coordinates(
             engine = 'pyheadtail'
 
     if engine == "linear":
+        if energy_ref_increment is not None and energy_ref_increment != 0:
+            raise NotImplementedError(
+                'Reference energy increment not yet supported for linear matching')
         if distribution != 'gaussian':
             raise NotImplementedError
         assert line is not None, ('Not yet implemented if line is not provided')
         sigma_dp = sigma_z / np.abs(dct['bets0'])
         z_particles = sigma_z * np.random.normal(size=num_particles)
         delta_particles = sigma_dp * np.random.normal(size=num_particles)
+        assert energy_ref_increment is None
     elif engine == "pyheadtail":
         if distribution != 'gaussian':
             raise NotImplementedError
+
+        dp0c_eV = 0.
+        if energy_ref_increment:
+            dp0c_eV = energy_ref_increment / beta0 # valid for small energy change
+                                                # See Wille, The Physics of Particle Accelerators
+                                                # Appendix B, formula B.16 .
+        if p0c_increase_from_energy_program is not None:
+            dp0c_eV += p0c_increase_from_energy_program
+
+        dp0c_J = dp0c_eV * qe
+        dp0_si = dp0c_J / clight
 
         rfbucket = RFBucket(circumference=circumference,
                             gamma=gamma0,
@@ -217,26 +278,29 @@ def generate_longitudinal_coordinates(
                             harmonic_list=np.atleast_1d(rf_harmonic),
                             voltage_list=np.atleast_1d(rf_voltage),
                             phi_offset_list=np.atleast_1d(rf_phase),
-                            p_increment=p_increment)
+                            p_increment=dp0_si)
+        if _only_bucket:
+            return rfbucket
 
         if sigma_z < 0.03 * circumference/np.max(np.atleast_1d(rf_harmonic)):
             logger.info('short bunch, use linear matching')
+            if energy_ref_increment is not None and energy_ref_increment != 0:
+                raise NotImplementedError(
+                    'Reference energy increment not yet supported for linear matching')
             eta = momentum_compaction_factor - 1/particle_ref._xobject.gamma0[0]**2
             beta_z = np.abs(eta) * circumference / 2.0 / np.pi / rfbucket.Q_s
             sigma_dp = sigma_z / beta_z
-
             z_particles = sigma_z * np.random.normal(size=num_particles)
             delta_particles = sigma_dp * np.random.normal(size=num_particles)
-
         else:
-            # Generate longitudinal coordinates
             matcher = RFBucketMatcher(rfbucket=rfbucket,
                 distribution_type=ThermalDistribution,
                 sigma_z=sigma_z)
             z_particles, delta_particles, _, _ = matcher.generate(
-                                                    macroparticlenumber=num_particles)
+                                        macroparticlenumber=num_particles)
+
     elif engine == "single-rf-harmonic":
-        if distribution not in ["parabolic", "gaussian"]:
+        if distribution not in ["parabolic", "gaussian", "binomial", "qgaussian"]:
             raise NotImplementedError
         eta = momentum_compaction_factor - 1/particle_ref._xobject.gamma0[0]**2
 
@@ -260,7 +324,7 @@ def generate_longitudinal_coordinates(
                                           slip_factor=eta,
                                           beta0=particle_ref._xobject.beta0[0],
                                           rms_bunch_length=sigma_tau,
-                                          distribution=distribution)
+                                          distribution=distribution, m=m, q=q)
 
         tau, ptau = matcher.sample_tau_ptau(n_particles=num_particles)
 

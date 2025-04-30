@@ -4,6 +4,7 @@
 # ######################################### #
 
 '''
+This module was originally written for PyHEADTAIL
 @author Kevin Li, Adrian Oeftiger, Stefan Hegglin
 @date 16.06.2017
 @brief module for matching longitudinal particle distributions to an RFBucket instance
@@ -277,6 +278,10 @@ class ThermalDistribution(StationaryDistribution):
         # to conventional literature scale (zero-valued minimum at SFP)
         Hsep = self.Hcut + self.Hmax
         Hn = Hsep - H
+        # if self.H0<1:
+        #     print('Hn', Hn)
+        #     print('H0', self.H0)
+        #     breakpoint()
         # f(Hn) - f(Hsep)
         return np.exp(-Hn / self.H0) - np.exp(-Hsep / self.H0)
 

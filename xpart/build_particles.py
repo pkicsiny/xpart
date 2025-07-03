@@ -169,7 +169,8 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
         'p0c': particle_ref.p0c[0],
         'gamma0': particle_ref.gamma0[0],
         'beta0': particle_ref.beta0[0],
-        'pdg_id': particle_ref.pdg_id[0]
+        'pdg_id': particle_ref.pdg_id[0],
+        'anomalous_magnetic_moment': particle_ref.anomalous_magnetic_moment[0],
     }
     part_dict = ref_dict.copy()
 
@@ -447,5 +448,15 @@ def build_particles(_context=None, _buffer=None, _offset=None, _capacity=None,
         particles.at_element[:num_particles] = at_element
 
         particles.start_tracking_at_element = at_element
+
+    particles.spin_x[:num_particles] = particle_ref._xobject.spin_x[0]
+    particles.spin_y[:num_particles] = particle_ref._xobject.spin_y[0]
+    particles.spin_z[:num_particles] = particle_ref._xobject.spin_z[0]
+    if 'spin_x' in kwargs:
+        particles.spin_x[:num_particles] = kwargs['spin_x']
+    if 'spin_y' in kwargs:
+        particles.spin_y[:num_particles] = kwargs['spin_y']
+    if 'spin_z' in kwargs:
+        particles.spin_z[:num_particles] = kwargs['spin_z']
 
     return particles

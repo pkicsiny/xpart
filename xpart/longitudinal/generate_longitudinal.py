@@ -28,6 +28,8 @@ def _characterize_line(line, particle_ref,
         logger.warning('Ignoring collective elements in particles generation.')
         line = line._get_non_collective_line()
 
+    radiation_active = line._radiation_model is not None
+
     T_rev = line.get_length()/(particle_ref._xobject.beta0[0]*clight)
     freq_list = []
     lag_list_deg = []
@@ -40,10 +42,17 @@ def _characterize_line(line, particle_ref,
         if ee.__class__.__name__ == 'Cavity':
             eecp = ee.copy(_context=xo.ContextCpu())
             if ee.voltage != 0:
-                freq_list.append(eecp.frequency)
-                lag_list_deg.append(eecp.lag)
+                lag = eecp.lag
+                if radiation_active:
+                    lag += eecp.lag_taper
+                lag_list_deg.append(lag)
                 voltage_list.append(eecp.voltage)
-                h_list.append(eecp.frequency*T_rev)
+                if eecp.frequency == 0:
+                    h_list.append(eecp.harmonic)
+                    freq_list.append(eecp.harmonic / T_rev)
+                else:
+                    h_list.append(eecp.frequency*T_rev)
+                    freq_list.append(eecp.frequency)
                 found_nonlinear_longitudinal = True
         elif ee.__class__.__name__ == 'LineSegmentMap':
             eecp = ee.copy(_context=xo.ContextCpu())
@@ -84,6 +93,9 @@ def _characterize_line(line, particle_ref,
     if found_nonlinear_longitudinal:
         assert len(freq_list) > 0
 
+    if radiation_active:
+        kwargs['eneloss_and_damping'] = True
+
     tw = line.twiss(
         particle_ref=particle_ref, **kwargs)
 
@@ -91,7 +103,9 @@ def _characterize_line(line, particle_ref,
     if line.energy_program is not None:
         p0c_increase_from_energy_program = line.energy_program.get_p0c_increse_per_turn_at_t_s(
                                                         line.vv['t_turn_s'])
-
+    energy_loss_from_radiation = 0.
+    if radiation_active:
+        energy_loss_from_radiation = tw.eneloss_turn
 
     dct={}
     dct['T_rev'] = T_rev
@@ -106,6 +120,7 @@ def _characterize_line(line, particle_ref,
     dct['found_only_linear_longitudinal'] = found_only_linear_longitudinal
     dct['energy_ref_increment_list'] = energy_ref_increment_list
     dct['p0c_increase_from_energy_program'] = p0c_increase_from_energy_program
+    dct['energy_loss_from_radiation'] = energy_loss_from_radiation
     return dct
 
 def get_bucket(line, **kwargs):
@@ -130,6 +145,7 @@ def generate_longitudinal_coordinates(
                                     rf_voltage=None,
                                     rf_phase=None,
                                     energy_ref_increment=None,
+                                    energy_loss_from_radiation=None,
                                     tracker=None,
                                     m=None,
                                     q=None,
@@ -185,6 +201,8 @@ def generate_longitudinal_coordinates(
         line = tracker.line
 
     if line is not None:
+        if not line._has_valid_tracker():
+            line.build_tracker()
         if particle_ref is None:
             particle_ref = line.particle_ref
         assert particle_ref is not None
@@ -231,6 +249,10 @@ def generate_longitudinal_coordinates(
             energy_ref_increment = np.sum(energy_ref_increment_list)
         p0c_increase_from_energy_program = dct['p0c_increase_from_energy_program']
 
+    energy_loss_from_radiation = 0.
+    if line is not None and energy_loss_from_radiation is not None:
+        energy_loss_from_radiation = dct['energy_loss_from_radiation']
+
     assert sigma_z is not None
 
     # Compute beta0 from gamma0
@@ -248,6 +270,9 @@ def generate_longitudinal_coordinates(
         if energy_ref_increment is not None and energy_ref_increment != 0:
             raise NotImplementedError(
                 'Reference energy increment not yet supported for linear matching')
+        if energy_loss_from_radiation:
+            raise NotImplementedError(
+                'Energy loss from radiation not yet supported for linear matching')
         if distribution != 'gaussian':
             raise NotImplementedError
         assert line is not None, ('Not yet implemented if line is not provided')
@@ -261,11 +286,14 @@ def generate_longitudinal_coordinates(
 
         dp0c_eV = 0.
         if energy_ref_increment:
-            dp0c_eV = energy_ref_increment / beta0 # valid for small energy change
+            dp0c_eV += energy_ref_increment / beta0 # valid for small energy change
                                                 # See Wille, The Physics of Particle Accelerators
                                                 # Appendix B, formula B.16 .
         if p0c_increase_from_energy_program is not None:
             dp0c_eV += p0c_increase_from_energy_program
+
+        if energy_loss_from_radiation:
+            dp0c_eV += energy_loss_from_radiation / beta0
 
         dp0c_J = dp0c_eV * qe
         dp0_si = dp0c_J / clight

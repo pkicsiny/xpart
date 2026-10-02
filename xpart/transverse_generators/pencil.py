@@ -5,6 +5,7 @@
 
 import numpy as np
 from .polar import generate_2D_uniform_circular_sector
+from ..build_particles import _trasport_twiss_over_drift
 from ..general import _print
 
 import xpart as xp
@@ -12,28 +13,58 @@ import xpart as xp
 def generate_2D_pencil(num_particles, pos_cut_sigmas, dr_sigmas,
                        side='+'):
 
-    '''
-    Generate a 2D pencil beam distribution.
+    """
+    Generate a 2D pencil distribution in normalized coordinates.
+
+    The generated points lie outside a position cut and within a radial
+    thickness `dr_sigmas`, expressed in units of the normalized beam size. For
+    `side='+'`, the cut is applied on the positive side of the first
+    coordinate; for `side='-'`, on the negative side. With `side='+-'`, the
+    particles are split between the two sides.
 
     Parameters
     ----------
     num_particles : int
-        Number of particles to be generated.
+        Number of points to generate.
     pos_cut_sigmas : float
-        Position cut in sigmas.
+        Position cut in units of sigma.
     dr_sigmas : float
-        Radius of the pencil beam in sigmas.
-    side : str
-        Side of the pencil beam. Can be '+', '-' or '+-'.
+        Radial thickness of the pencil distribution in units of sigma.
+    side : {'+', '-', '+-'}, optional
+        Side on which to generate the pencil distribution.
 
     Returns
     -------
-    x1 : np.ndarray
+    x_norm : np.ndarray
         First normalized coordinate.
-    x2 : np.ndarray
+    px_norm : np.ndarray
         Second normalized coordinate.
+    r_points : np.ndarray
+        Radial coordinate of the generated points.
+    theta_points : np.ndarray
+        Angular coordinate in rad of the generated points.
 
-    '''
+    Example
+    -------
+
+    .. code-block:: python
+
+        import numpy as np
+        import xpart as xp
+
+        np.random.seed(12345)
+
+        x_norm, px_norm, r, theta = xp.generate_2D_pencil(
+            num_particles=4,
+            pos_cut_sigmas=6.0,
+            dr_sigmas=0.1,
+            side='-')
+
+        x_norm  # [-6.042132, -6.023206, -6.015881, -6.002956]
+        px_norm # [0.785794, 0.322182, 0.178111, 0.46048]
+        r       # [6.093015, 6.031817, 6.018517, 6.020591]
+        theta   # [3.012266, 3.088153, 3.111994, 3.065034]
+    """
 
     assert side == '+' or side == '-' or side == '+-'
 
@@ -82,6 +113,7 @@ def generate_2D_pencil(num_particles, pos_cut_sigmas, dr_sigmas,
 
         if side == '-':
             x_norm = -x_norm
+            theta_points = np.arctan2(px_norm, x_norm)
 
         return x_norm, px_norm, r_points, theta_points
 
@@ -91,34 +123,90 @@ def generate_2D_pencil_with_absolute_cut(num_particles,
     nemitt_x=None, nemitt_y=None,
     at_element=None, match_at_s=None, twiss=None, **kwargs):
 
-    '''
-    Generate a 2D pencil beam distribution with an absolute cut.
+    """
+    Generate a 2D pencil distribution with a cut in physical coordinates.
+
+    The requested `absolute_cut` is converted to normalized coordinates at the
+    selected location using the line optics and the provided normalized
+    emittances. A normalized pencil distribution is then generated with
+    `generate_2D_pencil` and converted back to physical coordinates.
 
     Parameters
     ----------
-    line: xtrack.Line
-        Line for which the coordinates are generated.
     num_particles : int
-        Number of particles to be generated.
-    plane : str
-        Plane of the pencil beam. Can be 'x' or 'y'.
+        Number of points to generate.
+    plane : {'x', 'y'}
+        Plane in which to generate the pencil distribution.
     absolute_cut : float
-        Absolute cut in meters.
+        Position cut in m.
     dr_sigmas : float
-        Radius of the pencil beam in sigmas.
-    side : str
-        Side of the pencil beam. Can be '+' or '-'.
+        Radial thickness of the pencil distribution in units of sigma.
+    side : {'+', '-'}, optional
+        Side on which to generate the pencil distribution.
+    tracker : xtrack.Tracker, optional
+        Deprecated. Use `line` instead.
+    line : xtrack.Line
+        Line used to compute the optics and physical coordinates.
+    nemitt_x : float
+        Normalized horizontal emittance in m rad.
+    nemitt_y : float
+        Normalized vertical emittance in m rad.
+    at_element : int or str, optional
+        Element at which the cut is defined. If not provided, the start of the
+        line is used.
+    match_at_s : float, optional
+        Longitudinal position in m at which the cut is defined, downstream of
+        `at_element`. If provided, `at_element` must also be provided.
+    twiss : xtrack.TwissTable or table row, optional
+        Twiss data at the selected location. If not provided, it is computed
+        from `line`.
+    **kwargs
+        Additional keyword arguments passed to `line.twiss` and
+        `line.build_particles`.
 
     Returns
     -------
-    x1 : np.ndarray
-        First normalized coordinate.
-    x2 : np.ndarray
-        Second normalized coordinate.
+    v : np.ndarray
+        Physical coordinate in the selected plane, `x` for `plane='x'` or `y`
+        for `plane='y'`, in m.
+    pv : np.ndarray
+        Conjugate physical coordinate in the selected plane, `px` for
+        `plane='x'` or `py` for `plane='y'`.
 
-    '''
+    Example
+    -------
 
+    .. code-block:: python
 
+        import numpy as np
+        import xpart as xp
+        import xtrack as xt
+
+        np.random.seed(12345)
+
+        line = xt.Line(elements=[
+            xt.LineSegmentMap(
+                length=1.0,
+                betx=2.0, qx=0.31,
+                bety=3.0, qy=0.32,
+            )
+        ])
+        line.set_particle_ref('proton', p0c=7e12)
+
+        x, px = xp.generate_2D_pencil_with_absolute_cut(
+            num_particles=4,
+            plane='x',
+            absolute_cut=2e-3,
+            dr_sigmas=0.2,
+            side='+',
+            line=line,
+            nemitt_x=2e-6,
+            nemitt_y=2e-6,
+            method='4d')
+
+        x   # [0.002001065, 0.002000729, 0.002000124, 0.002001496]
+        px  # [2.005039e-05, 1.110235e-05, 2.871550e-05, -3.370225e-05]
+    """
 
     if line is not None and tracker is not None:
         raise ValueError(
@@ -147,16 +235,21 @@ def generate_2D_pencil_with_absolute_cut(num_particles,
 
     if match_at_s is not None:
         import xtrack as xt
+        tt = line.get_table()
         drift_to_at_s = xt.Drift(_context=line._context,
-            length=match_at_s - line.get_s_position(at_element))
+            length=match_at_s - tt['s', at_element])
     else:
         drift_to_at_s = None
 
     if twiss is None:
-        twiss = line.twiss(at_s=match_at_s,
-            at_elements=([at_element] if match_at_s is None else None),
-            **kwargs)
-
+        # twiss = line.twiss(at_elements=([at_element] if match_at_s is None else None), at_s=match_at_s, **kwargs)
+        twiss = line.twiss(**kwargs).rows[at_element]
+        if match_at_s is not None:
+            tt = line.tracker._tracker_data_base._line_table
+            ds = match_at_s - tt['s', at_element]
+            assert ds > 0
+            tw_init = twiss.get_twiss_init(at_element=at_element)
+            twiss = _trasport_twiss_over_drift(line.env, tw_init, ds).rows['_end_point']
     if side=='+':
         assert twiss[plane][0] < absolute_cut, 'The cut is on the wrong side'
     else:
@@ -184,9 +277,9 @@ def generate_2D_pencil_with_absolute_cut(num_particles,
                                         _force_at_element=0 # the twiss has only this element
                                         )
     if plane == 'x':
-        pencil_cut_sigmas = np.abs(p_on_cut_norm.x_norm)
+        pencil_cut_sigmas = np.abs(p_on_cut_norm.x_norm)[0]
     else:
-        pencil_cut_sigmas = np.abs(p_on_cut_norm.y_norm)
+        pencil_cut_sigmas = np.abs(p_on_cut_norm.y_norm)[0]
 
     # Generate normalized pencil in the selected plane (here w is x or y according to plane)
     w_in_sigmas, pw_in_sigmas, r_points, theta_points = xp.generate_2D_pencil(
@@ -216,4 +309,3 @@ def generate_2D_pencil_with_absolute_cut(num_particles,
         return p_pencil_at_s.x, p_pencil_at_s.px
     else:
         return p_pencil_at_s.y, p_pencil_at_s.py
-

@@ -4,12 +4,46 @@
 # ######################################### #
 
 import json
+import pathlib
 import numpy as np
 
+import xobjects as xo
 import xpart as xp
 import xtrack as xt
 
+TEST_DATA_FOLDER = pathlib.Path(__file__).parent / '../../xtrack/test_data'
+
 from xobjects.test_helpers import for_all_test_contexts
+
+
+def test_pencil_polar_coordinates():
+    for side in ['+', '-', '+-']:
+        _check_pencil_polar_coordinates(side)
+
+
+def _check_pencil_polar_coordinates(side):
+    x_norm, px_norm, r_points, theta_points = xp.generate_2D_pencil(
+        num_particles=10000,
+        pos_cut_sigmas=6.,
+        dr_sigmas=0.7,
+        side=side)
+
+    if side == '+':
+        assert np.all(x_norm > 6.)
+    elif side == '-':
+        assert np.all(x_norm < -6.)
+    else:
+        assert np.any(x_norm < -6.)
+        assert np.any(x_norm > 6.)
+
+    xo.assert_allclose(r_points, np.sqrt(x_norm**2 + px_norm**2),
+                       rtol=1e-05, atol=1e-08)
+    xo.assert_allclose(theta_points, np.arctan2(px_norm, x_norm),
+                       rtol=1e-05, atol=1e-08)
+    xo.assert_allclose(x_norm, r_points * np.cos(theta_points),
+                       rtol=1e-05, atol=1e-08)
+    xo.assert_allclose(px_norm, r_points * np.sin(theta_points),
+                       rtol=1e-05, atol=1e-08)
 
 
 @for_all_test_contexts
@@ -19,7 +53,7 @@ def test_pencil(test_context):
     nemitt_y = 3e-6
 
     # Load machine model (from pymask)
-    filename = xt._pkg_root.parent.joinpath('test_data/lhc_no_bb/line_and_particle.json')
+    filename = TEST_DATA_FOLDER.joinpath('lhc_no_bb/line_and_particle.json')
     with open(filename, 'r') as fid:
         input_data = json.load(fid)
     line = xt.Line.from_dict(input_data['line'])

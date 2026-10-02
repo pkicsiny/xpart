@@ -4,14 +4,86 @@
 # ######################################### #
 
 import json
+import pathlib
 
 import numpy as np
 import pytest
 import xtrack as xt
 import xobjects as xo
+from scipy.constants import e, m_p
 
 import xpart as xp
+from xpart.longitudinal.rf_bucket import RFBucket
 from xobjects.test_helpers import fix_random_seed
+
+TEST_DATA_FOLDER = pathlib.Path(__file__).parent / '../../xtrack/test_data'
+
+
+def test_rf_bucket_auto_centers_with_phase_offset():
+    circumference = 26658.883
+    harmonic = 35640
+    zmax = circumference / (2 * harmonic)
+
+    phi = 1.0 + np.pi  # non-zero RF phase
+
+    bucket = RFBucket(
+        circumference=circumference,
+        gamma=479.6,
+        mass_kg=m_p,
+        charge_coulomb=e,
+        alpha_array=np.atleast_1d(3.2163e-4),
+        harmonic_list=np.atleast_1d(harmonic),
+        voltage_list=np.atleast_1d(6e6),
+        phi_offset_list=np.atleast_1d(phi),
+        p_increment=0,
+        zeta0=None,
+    )
+
+    z_sfp_expected = (phi+np.pi-2*np.pi) / (2 * np.pi) * circumference / harmonic
+    assert bucket.z_right > bucket.z_left
+    xo.assert_allclose(bucket.z_sfp[0], z_sfp_expected,
+                       rtol=1e-12, atol=1e-14)
+    xo.assert_allclose(bucket.z_right - bucket.z_left, 2 * zmax,
+                       rtol=1e-12, atol=1e-14)
+
+
+@fix_random_seed(12345)
+def test_single_rf_harmonic_compact_line():
+    circumference = 26658.883
+    momentum_compaction_factor = 3.225e-4
+    sigma_z = 0.02
+    line = xt.Line(elements=[
+        xt.LineSegmentMap(
+            length=circumference,
+            betx=1.0, qx=0.31,
+            bety=1.0, qy=0.32,
+            longitudinal_mode='linear_fixed_rf',
+            voltage_rf=16e6,
+            frequency_rf=400.8e6,
+            phase_rf=np.pi,
+            slippage_length=circumference,
+            momentum_compaction_factor=momentum_compaction_factor,
+        )
+    ])
+    line.set_particle_ref('proton', p0c=7e12)
+
+    zeta, delta, matcher = xp.generate_longitudinal_coordinates(
+        line=line,
+        num_particles=20000,
+        sigma_z=sigma_z,
+        engine='single-rf-harmonic',
+        return_matcher=True)
+
+    assert matcher.__class__.__name__ == 'SingleRFHarmonicMatcher'
+    assert len(zeta) == 20000
+    assert len(delta) == 20000
+    assert np.all(np.isfinite(zeta))
+    assert np.all(np.isfinite(delta))
+
+    tw = line.twiss()
+    xo.assert_allclose(np.std(zeta), sigma_z, rtol=1e-2, atol=1e-15)
+    xo.assert_allclose(np.std(delta), sigma_z / abs(tw['bets0']),
+                       rtol=1e-2, atol=1e-15)
 
 
 @pytest.mark.parametrize('scenario', ['psb_injection', 'sps_ions', 'lhc_protons'])
@@ -28,8 +100,7 @@ def test_single_rf_harmonic_matcher_rms_and_profile_and_tune(
                               delta=[10], _context=ctx)
 
             # Load machine model (from pymask)
-            filename = xt._pkg_root.parent.joinpath(
-                'test_data/lhc_no_bb/line_and_particle.json')
+            filename = TEST_DATA_FOLDER.joinpath('lhc_no_bb/line_and_particle.json')
             with open(filename, 'r') as fid:
                 input_data = json.load(fid)
             line = xt.Line.from_dict(input_data['line'])
@@ -39,8 +110,7 @@ def test_single_rf_harmonic_matcher_rms_and_profile_and_tune(
 
         elif scenario == "sps_ions":
             # Load machine model (spsion)
-            filename = xt._pkg_root.parent.joinpath(
-                'test_data/sps_ions/line_and_particle.json')
+            filename = TEST_DATA_FOLDER.joinpath('sps_ions/line_and_particle.json')
             with open(filename, 'r') as fid:
                 input_data = json.load(fid)
             line = xt.Line.from_dict(input_data)
@@ -48,8 +118,7 @@ def test_single_rf_harmonic_matcher_rms_and_profile_and_tune(
             rms_bunch_length = 0.10
         elif scenario == "psb_injection":
             # Load machine model (psb injection)
-            filename = xt._pkg_root.parent.joinpath(
-                'test_data/psb_injection/line_and_particle.json')
+            filename = TEST_DATA_FOLDER.joinpath('psb_injection/line_and_particle.json')
             with open(filename, 'r') as fid:
                 input_data = json.load(fid)
             line = xt.Line.from_dict(input_data)
@@ -75,10 +144,10 @@ def test_single_rf_harmonic_matcher_rms_and_profile_and_tune(
         twiss_tune = line.twiss()['qs']
         theoretical_synchrotron_tune = matcher.get_synchrotron_tune()
 
-        assert np.isclose(theoretical_synchrotron_tune,
-                          twiss_tune, rtol=3.e-3, atol=1.e-15)
+        xo.assert_allclose(theoretical_synchrotron_tune,
+                           twiss_tune, rtol=3.e-3, atol=1.e-15)
 
-        assert np.isclose(rms_bunch_length, np.std(zeta),
-                          rtol=2e-2, atol=1e-15)
+        xo.assert_allclose(rms_bunch_length, np.std(zeta),
+                           rtol=2e-2, atol=1e-15)
 
         xo.assert_allclose(hist, tau_distr_y, atol=3.e-2, rtol=1.e-2)

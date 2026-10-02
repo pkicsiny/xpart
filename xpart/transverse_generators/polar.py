@@ -41,39 +41,70 @@ def generate_2D_polar_grid(
         r_range=None, r_grid=None, dr=None, nr=None,
         theta_range=None, theta_grid=None, dtheta=None, ntheta=None):
 
-    '''
-    Generate a 2D polar grid.
+    """
+    Generate points on a 2D polar grid.
+
+    The radial and angular grids can be provided explicitly with `r_grid` and
+    `theta_grid`, or built from ranges. For each coordinate, provide either an
+    explicit grid, or a range together with either a step size or a number of
+    points. The returned arrays are flattened over all `(r, theta)`
+    combinations.
 
     Parameters
     ----------
-    r_range : tuple
-        Range of the radial coordinate.
-    r_grid : np.ndarray
-        Grid of the radial coordinate.
-    dr : float
-        Step of the radial coordinate.
-    nr : int
-        Number of points of the radial coordinate.
-    theta_range : tuple
-        Range of the angular coordinate.
-    theta_grid : np.ndarray
-        Grid of the angular coordinate.
-    dtheta : float
-        Step of the angular coordinate.
-    ntheta : int
-        Number of points of the angular coordinate.
+    r_range : tuple of float, optional
+        Radial range `(r_min, r_max)`. Required if `r_grid` is not provided.
+    r_grid : array_like, optional
+        Explicit uniformly spaced radial grid. If provided, `r_range`, `dr`,
+        and `nr` must not be provided.
+    dr : float, optional
+        Radial step used with `r_range`. Cannot be provided together with `nr`.
+    nr : int, optional
+        Number of radial points used with `r_range`. Required when `r_grid` and
+        `dr` are not provided.
+    theta_range : tuple of float, optional
+        Angular range `(theta_min, theta_max)` in rad. Required if
+        `theta_grid` is not provided.
+    theta_grid : array_like, optional
+        Explicit uniformly spaced angular grid in rad. If provided,
+        `theta_range`, `dtheta`, and `ntheta` must not be provided.
+    dtheta : float, optional
+        Angular step in rad used with `theta_range`. Cannot be provided
+        together with `ntheta`.
+    ntheta : int, optional
+        Number of angular points used with `theta_range`. Required when
+        `theta_grid` and `dtheta` are not provided.
 
     Returns
     -------
     a1 : np.ndarray
-        First normalized coordinate.
+        First Cartesian normalized coordinate, equal to
+        `r_all * cos(theta_all)`.
     a2 : np.ndarray
-        Second normalized coordinate.
+        Second Cartesian normalized coordinate, equal to
+        `r_all * sin(theta_all)`.
     r_all : np.ndarray
-        Radial coordinate.
+        Radial coordinate for each generated point.
     theta_all : np.ndarray
-        Angular coordinate.
-    '''
+        Angular coordinate in rad for each generated point.
+
+    Example
+    -------
+
+    .. code-block:: python
+
+        import numpy as np
+        import xpart as xp
+
+        a1, a2, r, theta = xp.generate_2D_polar_grid(
+            r_range=(1.0, 2.0), nr=2,
+            theta_range=(0.0, np.pi / 2), ntheta=3)
+
+        a1     # [1.0, 0.707107, 0.0, 2.0, 1.414214, 0.0]
+        a2     # [0.0, 0.707107, 1.0, 0.0, 1.414214, 2.0]
+        r      # [1.0, 1.0, 1.0, 2.0, 2.0, 2.0]
+        theta  # [0.0, 0.785398, 1.570796, 0.0, 0.785398, 1.570796]
+    """
 
     _r_grid = _configure_grid('r', r_grid, dr, r_range, nr)
     _theta_grid = _configure_grid('theta', theta_grid, dtheta,
@@ -93,29 +124,54 @@ def generate_2D_polar_grid(
 def generate_2D_uniform_circular_sector(num_particles, r_range=(0, 1),
                                         theta_range=(0, 2*np.pi)):
 
-    '''
-    Generate a 2D uniform circular sector.
+    """
+    Generate points uniformly distributed over a 2D circular sector.
+
+    The radial coordinate is sampled so that the density is uniform in area
+    within the annular sector defined by `r_range` and `theta_range`.
 
     Parameters
     ----------
     num_particles : int
-        Number of particles to be generated.
-    r_range : tuple
-        Range of the radial coordinate.
-    theta_range : tuple
-        Range of the angular coordinate.
+        Number of points to generate.
+    r_range : tuple of float, optional
+        Radial range `(r_min, r_max)`.
+    theta_range : tuple of float, optional
+        Angular range `(theta_min, theta_max)` in rad.
 
     Returns
     -------
     a1 : np.ndarray
-        First normalized coordinate.
+        First Cartesian normalized coordinate, equal to
+        `r_all * cos(theta_all)`.
     a2 : np.ndarray
-        Second normalized coordinate.
+        Second Cartesian normalized coordinate, equal to
+        `r_all * sin(theta_all)`.
     r_all : np.ndarray
-        Radial coordinate.
+        Radial coordinate for each generated point.
     theta_all : np.ndarray
-        Angular coordinate.
-    '''
+        Angular coordinate in rad for each generated point.
+
+    Example
+    -------
+
+    .. code-block:: python
+
+        import numpy as np
+        import xpart as xp
+
+        np.random.seed(12345)
+
+        a1, a2, r, theta = xp.generate_2D_uniform_circular_sector(
+            num_particles=4,
+            r_range=(1.0, 2.0),
+            theta_range=(0.0, np.pi / 2))
+
+        a1     # [1.222453, 0.828498, 0.0694, 0.65832]
+        a2     # [1.514746, 1.123707, 1.24376, 1.086414]
+        r      # [1.946496, 1.396111, 1.245695, 1.270307]
+        theta  # [0.89178, 0.935479, 1.515056, 1.026008]
+    """
 
     # CDF(r) = (r^2 - r0^2)/(r1^2 - r0^2)
     # InvCDF(u) = sqrt(r0^2 + u * (r1^2 -r0^2))

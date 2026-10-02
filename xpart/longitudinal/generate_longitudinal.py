@@ -30,29 +30,46 @@ def _characterize_line(line, particle_ref,
 
     radiation_active = line._radiation_model is not None
 
+
+    if radiation_active:
+        kwargs['radiation_analysis'] = True
+
+    tw = line.twiss(
+        particle_ref=particle_ref, **kwargs)
+
     T_rev = line.get_length()/(particle_ref._xobject.beta0[0]*clight)
     freq_list = []
     lag_list_deg = []
+    phase_list_rad = []
     voltage_list = []
     h_list = []
+    shift_zeta_list = []
     energy_ref_increment_list = []
     found_nonlinear_longitudinal = False
     found_linear_longitudinal = False
-    for ee in line.elements:
+    for ii, ee in enumerate(line.elements):
         if ee.__class__.__name__ == 'Cavity':
             eecp = ee.copy(_context=xo.ContextCpu())
             if ee.voltage != 0:
                 lag = eecp.lag
+                phase = eecp.phase
                 if radiation_active:
                     lag += eecp.lag_taper
-                lag_list_deg.append(lag)
+                    phase += eecp.phase_taper
                 voltage_list.append(eecp.voltage)
                 if eecp.frequency == 0:
-                    h_list.append(eecp.harmonic)
+                    h = eecp.harmonic
+                    h_list.append(h)
                     freq_list.append(eecp.harmonic / T_rev)
                 else:
-                    h_list.append(eecp.frequency*T_rev)
+                    h = eecp.frequency*T_rev
+                    h_list.append(h)
                     freq_list.append(eecp.frequency)
+                # Account for the zeta slippage between the start of the ring
+                # and the cavity location, without folding it into the phase.
+                shift_zeta_list.append(tw.zeta[ii] - tw.zeta[0])
+                lag_list_deg.append(lag)
+                phase_list_rad.append(phase)
                 found_nonlinear_longitudinal = True
         elif ee.__class__.__name__ == 'LineSegmentMap':
             eecp = ee.copy(_context=xo.ContextCpu())
@@ -61,8 +78,10 @@ def _characterize_line(line, particle_ref,
             if eecp.longitudinal_mode in ['nonlinear' , 'linear_fixed_rf']:
                 freq_list += list(eecp.frequency_rf)
                 lag_list_deg += list(eecp.lag_rf)
+                phase_list_rad += list(eecp.phase_rf)
                 voltage_list += list(eecp.voltage_rf)
                 h_list += [ff*T_rev for ff in eecp.frequency_rf]
+                shift_zeta_list += [0.] * len(eecp.frequency_rf)
             if eecp.longitudinal_mode  == 'nonlinear':
                 found_nonlinear_longitudinal = True
             elif eecp.longitudinal_mode in ['linear_fixed_qs' , 'linear_fixed_rf']:
@@ -78,7 +97,6 @@ def _characterize_line(line, particle_ref,
                 energy_ref_increment_list.append(
                     eecp.Delta_p0c * particle_ref._xobject.beta0[0])
 
-
     found_only_linear_longitudinal = False
     if not found_linear_longitudinal and not found_nonlinear_longitudinal:
         raise ValueError('No longitudinal focusing found in the line. '
@@ -93,24 +111,19 @@ def _characterize_line(line, particle_ref,
     if found_nonlinear_longitudinal:
         assert len(freq_list) > 0
 
-    if radiation_active:
-        kwargs['eneloss_and_damping'] = True
-
-    tw = line.twiss(
-        particle_ref=particle_ref, **kwargs)
-
     p0c_increase_from_energy_program = None
     if line.energy_program is not None:
-        p0c_increase_from_energy_program = line.energy_program.get_p0c_increse_per_turn_at_t_s(
-                                                        line.vv['t_turn_s'])
+        p0c_increase_from_energy_program = line.energy_program.get_p0c_increase_per_turn_at_t_s(
+                                                        line['t_turn_s'])
     energy_loss_from_radiation = 0.
     if radiation_active:
-        energy_loss_from_radiation = tw.eneloss_turn
+        energy_loss_from_radiation = tw.energy_loss
 
     dct={}
     dct['T_rev'] = T_rev
     dct['freq_list'] = freq_list
     dct['lag_list_deg'] = lag_list_deg
+    dct['phase_list_rad'] = phase_list_rad
     dct['voltage_list'] = voltage_list
     dct['h_list'] = h_list
     dct['momentum_compaction_factor'] = tw['momentum_compaction_factor']
@@ -119,8 +132,11 @@ def _characterize_line(line, particle_ref,
     dct['bets0'] = tw['bets0']
     dct['found_only_linear_longitudinal'] = found_only_linear_longitudinal
     dct['energy_ref_increment_list'] = energy_ref_increment_list
+    dct['shift_zeta_list'] = shift_zeta_list
+    dct['zeta0'] = tw.zeta[0]
     dct['p0c_increase_from_energy_program'] = p0c_increase_from_energy_program
     dct['energy_loss_from_radiation'] = energy_loss_from_radiation
+    dct['delta0'] = tw.delta[0]
     return dct
 
 def get_bucket(line, **kwargs):
@@ -144,51 +160,120 @@ def generate_longitudinal_coordinates(
                                     rf_harmonic=None,
                                     rf_voltage=None,
                                     rf_phase=None,
+                                    rf_shift_zeta=None,
                                     energy_ref_increment=None,
                                     energy_loss_from_radiation=None,
                                     tracker=None,
                                     m=None,
                                     q=None,
+                                    zeta0=None,
+                                    delta0=None,
                                     _only_bucket=False,
                                     **kwargs # passed to twiss
                                     ):
 
-    '''
-    Generate longitudinal coordinates matched to given RF parameters (non-linar
-    bucket).
+    """
+    Generate longitudinal coordinates matched to an RF bucket.
+
+    The RF and optics parameters can be inferred from `line`, or provided
+    explicitly. With the default engine, linear longitudinal elements use a
+    linear Gaussian match, while nonlinear RF buckets use the PyHEADTAIL-style
+    RF bucket matcher.
 
     Parameters
     ----------
-    line: xline.Line
+    line : xtrack.Line, optional
         Line for which the longitudinal coordinates are generated.
-    num_particles: int
-        Number of particles to be generated.
-    distribution: str
-        Distribution of the particles. Possible values are `gaussian` and
-        `parabolic` and 'binomial'.
-    sigma_z: float
-        RMS bunch length in meters.
-    engine: str
-        Engine to be used for the generation. Possible values are `pyheadtail`
-        and `single-rf-harmonic`.
-    return_matcher: bool
-        If True, the matcher object is returned.
-    m : float
-        binomial parameter if distribution is 'binomial'
-    q : float
-        q-Gaussian parameter if distribution is 'qgaussian'
+    num_particles : int
+        Number of particles to generate.
+    distribution : {'gaussian', 'parabolic', 'binomial', 'qgaussian'}, optional
+        Longitudinal distribution to generate. Non-Gaussian distributions
+        require `engine='single-rf-harmonic'`.
+    sigma_z : float
+        RMS bunch length in m.
+    engine : {'linear', 'pyheadtail', 'single-rf-harmonic'}, optional
+        Matching engine. If not provided, it is selected from the line.
+    return_matcher : bool, optional
+        If True, also return the matcher object.
+    particle_ref : xpart.Particles, optional
+        Reference particle. If not provided, `line.particle_ref` is used.
+    mass0, q0, gamma0 : float, optional
+        Reference-particle properties used when they cannot be inferred from
+        `particle_ref`.
+    circumference : float, optional
+        Ring circumference in m. Required when no `line` is provided.
+    momentum_compaction_factor : float or array_like, optional
+        Momentum compaction factor.
+    rf_harmonic : float or array_like, optional
+        RF harmonic number or numbers.
+    rf_voltage : float or array_like, optional
+        RF voltage or voltages in V.
+    rf_phase : float or array_like, optional
+        RF phase or phases in rad.
+    rf_shift_zeta : float or array_like, optional
+        Longitudinal RF shifts in m.
+    energy_ref_increment : float, optional
+        Reference energy increment in eV.
+    energy_loss_from_radiation : float, optional
+        Energy loss from radiation in eV.
+    tracker : xtrack.Tracker, optional
+        Deprecated. Use `line` instead.
+    m : float, optional
+        Binomial distribution parameter.
+    q : float, optional
+        q-Gaussian distribution parameter.
+    zeta0 : float, optional
+        Reference longitudinal position in m.
+    delta0 : float, optional
+        Reference relative momentum deviation.
+    **kwargs
+        Additional keyword arguments passed to `line.twiss`.
 
     Returns
     -------
-    zeta: np.ndarray
-        Longitudinal position of the generated particles.
-    delta: np.ndarray
-        Longitudinal momentum deviation of the generated particles.
-    matcher: object
-        Matcher object used for the generation. Returned only if
+    zeta : np.ndarray
+        Longitudinal position in m.
+    delta : np.ndarray
+        Relative momentum deviation.
+    matcher : object
+        Matcher object used for the generation. Returned only when
         `return_matcher` is True.
 
-    '''
+    Example
+    -------
+
+    .. code-block:: python
+
+        import numpy as np
+        import xpart as xp
+        import xtrack as xt
+
+        np.random.seed(12345)
+
+        circumference = 26658.883
+        line = xt.Line(elements=[
+            xt.LineSegmentMap(
+                length=circumference,
+                betx=1.0, qx=0.31,
+                bety=1.0, qy=0.32,
+                longitudinal_mode='linear_fixed_rf',
+                voltage_rf=16e6,
+                frequency_rf=400.8e6,
+                phase_rf=np.pi,
+                slippage_length=circumference,
+                momentum_compaction_factor=3.225e-4,
+            )
+        ])
+        line.set_particle_ref('proton', p0c=7e12)
+
+        zeta, delta = xp.generate_longitudinal_coordinates(
+            line=line,
+            num_particles=4,
+            sigma_z=0.08)
+
+        zeta   # [-0.077427, -0.044981, 0.025293, -0.110336]
+        delta  # [5.386640e-05, 1.107963e-05, 1.492215e-04, 9.183090e-05]
+    """
 
     if line is not None and tracker is not None:
         raise ValueError(
@@ -240,7 +325,27 @@ def generate_longitudinal_coordinates(
 
     if rf_phase is None:
         assert line is not None
-        rf_phase=(np.array(dct['lag_list_deg']))/180*np.pi
+        rf_phase=((np.array(dct['lag_list_deg'])) / 180 * np.pi
+                 + np.array(dct['phase_list_rad']))
+
+    if delta0 is None:
+        assert line is not None
+        delta0 = dct['delta0']
+
+    if zeta0 is None:
+        if line is not None:
+            zeta0 = dct['zeta0']
+        else:
+            zeta0 = 0.
+
+    if rf_shift_zeta is None:
+        if line is not None:
+            rf_shift_zeta = dct['shift_zeta_list']
+        else:
+            rf_shift_zeta = np.zeros_like(np.atleast_1d(rf_harmonic),
+                                          dtype=float)
+
+    bucket_delta0 = delta0
 
     p0c_increase_from_energy_program = 0.
     if energy_ref_increment is None and line is not None:
@@ -248,6 +353,9 @@ def generate_longitudinal_coordinates(
         if energy_ref_increment_list:
             energy_ref_increment = np.sum(energy_ref_increment_list)
         p0c_increase_from_energy_program = dct['p0c_increase_from_energy_program']
+        if (energy_ref_increment is not None
+                or p0c_increase_from_energy_program is not None):
+            bucket_delta0 = 0.
 
     energy_loss_from_radiation = 0.
     if line is not None and energy_loss_from_radiation is not None:
@@ -277,8 +385,8 @@ def generate_longitudinal_coordinates(
             raise NotImplementedError
         assert line is not None, ('Not yet implemented if line is not provided')
         sigma_dp = sigma_z / np.abs(dct['bets0'])
-        z_particles = sigma_z * np.random.normal(size=num_particles)
-        delta_particles = sigma_dp * np.random.normal(size=num_particles)
+        z_particles = zeta0 + sigma_z * np.random.normal(size=num_particles)
+        delta_particles = delta0 + sigma_dp * np.random.normal(size=num_particles)
         assert energy_ref_increment is None
     elif engine == "pyheadtail":
         if distribution != 'gaussian':
@@ -306,20 +414,32 @@ def generate_longitudinal_coordinates(
                             harmonic_list=np.atleast_1d(rf_harmonic),
                             voltage_list=np.atleast_1d(rf_voltage),
                             phi_offset_list=np.atleast_1d(rf_phase),
-                            p_increment=dp0_si)
+                            p_increment=dp0_si,
+                            shift_zeta_list=np.atleast_1d(rf_shift_zeta),
+                            zeta0=zeta0,
+                            dp0=bucket_delta0)
         if _only_bucket:
             return rfbucket
 
-        if sigma_z < 0.03 * circumference/np.max(np.atleast_1d(rf_harmonic)):
+        rf_bucket_spacing = circumference / np.max(np.atleast_1d(rf_harmonic))
+        bucket_half_width = min(
+            np.abs(rfbucket.z_sfp_extr - rfbucket.z_left),
+            np.abs(rfbucket.z_right - rfbucket.z_sfp_extr),
+        )
+        short_bunch_threshold = min(
+            0.03 * rf_bucket_spacing,
+            0.1 * bucket_half_width,
+        )
+
+        if sigma_z < short_bunch_threshold:
             logger.info('short bunch, use linear matching')
             if energy_ref_increment is not None and energy_ref_increment != 0:
                 raise NotImplementedError(
                     'Reference energy increment not yet supported for linear matching')
-            eta = momentum_compaction_factor - 1/particle_ref._xobject.gamma0[0]**2
-            beta_z = np.abs(eta) * circumference / 2.0 / np.pi / rfbucket.Q_s
+            beta_z = rfbucket.beta_z
             sigma_dp = sigma_z / beta_z
-            z_particles = sigma_z * np.random.normal(size=num_particles)
-            delta_particles = sigma_dp * np.random.normal(size=num_particles)
+            z_particles = zeta0 + sigma_z * np.random.normal(size=num_particles)
+            delta_particles = delta0 + sigma_dp * np.random.normal(size=num_particles)
         else:
             matcher = RFBucketMatcher(rfbucket=rfbucket,
                 distribution_type=ThermalDistribution,
@@ -330,7 +450,6 @@ def generate_longitudinal_coordinates(
     elif engine == "single-rf-harmonic":
         if distribution not in ["parabolic", "gaussian", "binomial", "qgaussian"]:
             raise NotImplementedError
-        eta = momentum_compaction_factor - 1/particle_ref._xobject.gamma0[0]**2
 
         # if fragment
         if particle_ref._xobject.chi[0] != 1.0:
@@ -349,7 +468,7 @@ def generate_longitudinal_coordinates(
                                           length=circumference,
                                           freq=dct['freq_list'][0],
                                           p0c=particle_ref._xobject.p0c[0],
-                                          slip_factor=eta,
+                                          slip_factor=dct['slip_factor'],
                                           beta0=particle_ref._xobject.beta0[0],
                                           rms_bunch_length=sigma_tau,
                                           distribution=distribution, m=m, q=q)
@@ -362,7 +481,10 @@ def generate_longitudinal_coordinates(
                                    zeta=z_particles, ptau=ptau)
         delta_particles = np.array(temp_particles.delta)
     else:
-        raise NotImplementedError # TODO better message
+        raise NotImplementedError(
+            f"Longitudinal generation engine {engine!r} is not supported. "
+            "Supported engines are 'linear', 'pyheadtail', and "
+            "'single-rf-harmonic'.")
 
     if return_matcher:
         return z_particles, delta_particles, matcher

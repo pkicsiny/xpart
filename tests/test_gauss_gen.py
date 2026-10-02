@@ -4,6 +4,7 @@
 # ######################################### #
 
 import json
+import pathlib
 
 import numpy as np
 
@@ -13,8 +14,7 @@ import xtrack as xt
 
 from xobjects.test_helpers import for_all_test_contexts
 
-test_data_folder = xt._pkg_root.joinpath('../test_data').absolute()
-
+TEST_DATA_FOLDER = pathlib.Path(__file__).parent / '../../xtrack/test_data'
 
 @for_all_test_contexts
 def test_gaussian_bunch_generation(test_context):
@@ -24,7 +24,7 @@ def test_gaussian_bunch_generation(test_context):
     nemitt_x = 2e-6
     nemitt_y = 2.5e-6
 
-    filename = test_data_folder.joinpath(
+    filename = TEST_DATA_FOLDER.joinpath(
         'sps_w_spacecharge/line_no_spacecharge_and_particle.json')
     with open(filename, 'r') as fid:
         ddd = json.load(fid)
@@ -57,13 +57,15 @@ def test_gaussian_bunch_generation(test_context):
     part_on_co.move(_context=xo.ContextCpu())
     gemitt_x = nemitt_x/part_on_co.beta0/part_on_co.gamma0
     gemitt_y = nemitt_y/part_on_co.beta0/part_on_co.gamma0
-    assert np.isclose(zeta_rms, sigma_z, rtol=1e-2, atol=1e-15)
-    assert np.isclose(x_rms,
-                      np.sqrt(tw['betx'][0]*gemitt_x + tw['dx'][0]**2*delta_rms**2),
-                      rtol=1e-2, atol=1e-15)
-    assert np.isclose(y_rms,
-                      np.sqrt(tw['bety'][0]*gemitt_y + tw['dy'][0]**2*delta_rms**2),
-                      rtol=1e-2, atol=1e-15)
+    xo.assert_allclose(zeta_rms, sigma_z, rtol=1e-2, atol=1e-15)
+    xo.assert_allclose(
+        x_rms,
+        np.sqrt(tw['betx'][0]*gemitt_x + tw['dx'][0]**2*delta_rms**2),
+        rtol=1e-2, atol=1e-15)
+    xo.assert_allclose(
+        y_rms,
+        np.sqrt(tw['bety'][0]*gemitt_y + tw['dy'][0]**2*delta_rms**2),
+        rtol=1e-2, atol=1e-15)
 
 
 @for_all_test_contexts
@@ -74,7 +76,7 @@ def test_short_bunch(test_context):
     nemitt_x = 2e-6
     nemitt_y = 2.5e-6
 
-    filename = test_data_folder.joinpath(
+    filename = TEST_DATA_FOLDER.joinpath(
             'sps_w_spacecharge/line_no_spacecharge_and_particle.json')
     with open(filename, 'r') as fid:
         ddd = json.load(fid)
@@ -100,14 +102,16 @@ def test_short_bunch(test_context):
 
     gemitt_x = nemitt_x/particle_ref.beta0[0]/particle_ref.gamma0[0]
     gemitt_y = nemitt_y/particle_ref.beta0[0]/particle_ref.gamma0[0]
-    assert np.isclose(zeta_rms, sigma_z, rtol=5e-2, atol=1e-15)
-    assert np.isclose(x_rms,
-                      np.sqrt(tw['betx'][0]*gemitt_x + tw['dx'][0]**2*delta_rms**2),
-                      rtol=5e-2, atol=1e-15)
-    assert np.isclose(y_rms,
-                      np.sqrt(tw['bety'][0]*gemitt_y + tw['dy'][0]**2*delta_rms**2),
-                      rtol=5e-2, atol=1e-15)
+    xo.assert_allclose(zeta_rms, sigma_z, rtol=5e-2, atol=1e-15)
+    xo.assert_allclose(
+        x_rms,
+        np.sqrt(tw['betx'][0]*gemitt_x + tw['dx'][0]**2*delta_rms**2),
+        rtol=5e-2, atol=1e-15)
+    xo.assert_allclose(
+        y_rms,
+        np.sqrt(tw['bety'][0]*gemitt_y + tw['dy'][0]**2*delta_rms**2),
+        rtol=5e-2, atol=1e-15)
 
     for iturn in range(100):
         line.track(part)
-        assert np.isclose(zeta_rms, sigma_z, rtol=5e-2, atol=1e-15)
+        xo.assert_allclose(zeta_rms, sigma_z, rtol=5e-2, atol=1e-15)

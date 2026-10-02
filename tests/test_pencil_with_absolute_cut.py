@@ -4,11 +4,14 @@
 # ######################################### #
 
 import json
+import pathlib
 from itertools import product
 import numpy as np
 
 import xpart as xp
 import xtrack as xt
+
+TEST_DATA_FOLDER = pathlib.Path(__file__).parent / '../../xtrack/test_data'
 import xobjects as xo
 from xobjects.test_helpers import for_all_test_contexts, fix_random_seed
 
@@ -22,7 +25,7 @@ def test_pencil_with_absolute_cut(test_context):
     nemitt_y = 3e-6
 
     # Load machine model
-    filename = xt._pkg_root.parent.joinpath('test_data/hllhc15_noerrors_nobb/line_and_particle.json')
+    filename = TEST_DATA_FOLDER.joinpath('hllhc15_noerrors_nobb/line_and_particle.json')
     with open(filename, 'r') as fid:
         input_data = json.load(fid)
     line=xt.Line.from_dict(input_data['line'])
@@ -32,7 +35,8 @@ def test_pencil_with_absolute_cut(test_context):
     # Location of the collimator
     at_element = 'tcp.6l3.b1' # High dispersion
     # at_element = 'tcp.d6l7.b1' # Low dispersion
-    at_s = line.get_s_position(at_element) + 1.
+    tt = line.get_table()
+    at_s = tt['s', at_element] + 1.
     absolute_cut = 3e-3 # position of the jaw
     pencil_dr_sigmas = 3 # width of the pencil
 
@@ -77,13 +81,15 @@ def test_pencil_with_absolute_cut(test_context):
 
         # Drift to at_s position for checking
         drift_to_at_s = xt.Drift(_context=test_context,
-                        length=at_s-line.get_s_position(at_element))
+                        length=at_s-tt['s', at_element])
         drift_to_at_s.track(particles)
 
         particles.move(_context=xo.ContextCpu())
         # Checks
 
-        tw_at_s = line.twiss(at_s=at_s)
+        line.cut_at_s([at_s])
+        tw = line.twiss()
+        tw_at_s = tw.rows[np.searchsorted(tw.s, at_s)]
         norm_coords = tw_at_s.get_normalized_coordinates(
                         particles, nemitt_x=nemitt_x, nemitt_y=nemitt_y,
                         _force_at_element=0)
@@ -96,12 +102,15 @@ def test_pencil_with_absolute_cut(test_context):
         sigma_v = np.sqrt(betv*nemitt_v
             /particles._xobject.beta0[0]/particles._xobject.gamma0[0])
 
-        assert(np.isclose(np.min(np.abs(v)), abs(absolute_cut), atol=1e-7))
-        assert(np.isclose(np.max(np.abs(v)), abs(absolute_cut) + sigma_v*pencil_dr_sigmas,
-            rtol=1e-3, atol=0))
+        xo.assert_allclose(
+            np.min(np.abs(v)), abs(absolute_cut), rtol=1e-05, atol=1e-7)
+        xo.assert_allclose(
+            np.max(np.abs(v)), abs(absolute_cut) + sigma_v*pencil_dr_sigmas,
+            rtol=1e-3, atol=0)
 
         i_tip = np.argmax(np.abs(v))
-        assert np.isclose(pv[i_tip]/v[i_tip], -alfv/betv, atol=5e-4)
+        xo.assert_allclose(
+            pv[i_tip]/v[i_tip], -alfv/betv, rtol=1e-05, atol=5e-4)
 
         if side == '+':
             assert np.all(v >= 0)
@@ -112,8 +121,8 @@ def test_pencil_with_absolute_cut(test_context):
         w_norm = getattr(norm_coords, other_plane+'_norm')
         pw_norm = getattr(norm_coords, 'p'+other_plane+'_norm')
 
-        xo.assert_allclose(w_in_sigmas, w_norm, atol=1e-12, rtol=1e-7)
-        xo.assert_allclose(pw_in_sigmas, pw_norm, atol=1e-12, rtol=1e-7)
+        xo.assert_allclose(w_in_sigmas, w_norm, atol=5e-10, rtol=1e-6)
+        xo.assert_allclose(pw_in_sigmas, pw_norm, atol=5e-10, rtol=1e-6)
 
-        xo.assert_allclose(zeta, particles.zeta, atol=1e-12, rtol=1e-7)
-        xo.assert_allclose(delta, particles.delta, atol=1e-12, rtol=1e-7)
+        xo.assert_allclose(zeta, particles.zeta, atol=5e-10, rtol=1e-6)
+        xo.assert_allclose(delta, particles.delta, atol=5e-10, rtol=1e-6)

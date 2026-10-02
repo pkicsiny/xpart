@@ -4,6 +4,7 @@
 # ######################################### #
 
 import json
+from pathlib import Path
 
 import numpy as np
 
@@ -13,6 +14,7 @@ import xobjects as xo
 
 from xobjects.test_helpers import for_all_test_contexts
 
+XT_TEST_DATA_FOLDER = Path(__file__).parent / '../../xtrack/test_data'
 
 @for_all_test_contexts
 def test_build_particles_normalized(test_context):
@@ -22,7 +24,7 @@ def test_build_particles_normalized(test_context):
 
 
     # Load machine model (from pymask)
-    filename = xt._pkg_root.parent.joinpath('test_data/lhc_no_bb/line_and_particle.json')
+    filename = XT_TEST_DATA_FOLDER.joinpath('lhc_no_bb/line_and_particle.json')
     with open(filename, 'r') as fid:
         input_data = json.load(fid)
     line = xt.Line.from_dict(input_data['line'])
@@ -39,8 +41,9 @@ def test_build_particles_normalized(test_context):
     dct = particles.to_dict() # transfers it to cpu
     xo.assert_allclose(dct['x'], [-0.0003883 , -0.0006076 , -0.00082689],
                        rtol=0, atol=1e-7)
-    assert np.isclose(dct['ptau'][1], 1e-3, rtol=0, atol=1e-9)
-    assert np.isclose(1/(dct['rpp'][1]) - 1, 1e-3, rtol=0, atol=1e-10)
+    xo.assert_allclose(dct['ptau'][1], 1e-3, rtol=0, atol=1e-9)
+    xo.assert_allclose(
+        1/(dct['rpp'][1]) - 1, 1e-3, rtol=0, atol=1e-10)
     assert np.all(dct['p0c'] == 7e12)
 
     # Same as before with R matrix provided as input
@@ -57,8 +60,9 @@ def test_build_particles_normalized(test_context):
     dct = particles.to_dict() # transfers it to cpu
     xo.assert_allclose(dct['x'], [-0.0003883, -0.0006076, -0.00082689],
                        rtol=0, atol=1e-7)
-    assert np.isclose(dct['ptau'][1], 1e-3, rtol=0, atol=1e-9)
-    assert np.isclose(1/(dct['rpp'][1]) - 1, 1e-3, rtol=0, atol=1e-10)
+    xo.assert_allclose(dct['ptau'][1], 1e-3, rtol=0, atol=1e-9)
+    xo.assert_allclose(
+        1/(dct['rpp'][1]) - 1, 1e-3, rtol=0, atol=1e-10)
     assert np.all(dct['p0c'] == 7e12)
 
     # Test the 4d mode
@@ -77,14 +81,15 @@ def test_build_particles_normalized(test_context):
     dct = particles.to_dict() # transfers it to cpu
     xo.assert_allclose(dct['x'], [-0.00038813 , -0.00060738 , -0.00082664],
                        rtol=0, atol=1e-7)
-    assert np.isclose(dct['ptau'][1], 1e-3, rtol=0, atol=1e-9)
-    assert np.isclose(1/(dct['rpp'][1]) - 1, 1e-3, rtol=0, atol=1e-10)
+    xo.assert_allclose(dct['ptau'][1], 1e-3, rtol=0, atol=1e-9)
+    xo.assert_allclose(
+        1/(dct['rpp'][1]) - 1, 1e-3, rtol=0, atol=1e-10)
     assert np.all(dct['p0c'] == 7e12)
 
 
 @for_all_test_contexts
 def test_build_particles_normalized_ions(test_context):
-    filename = xt._pkg_root.parent / 'test_data' / 'sps_ions' / 'line_and_particle.json'
+    filename = XT_TEST_DATA_FOLDER.joinpath('sps_ions/line_and_particle.json')
     with open(filename, 'r') as fid:
         input_data = json.load(fid)
     line = xt.Line.from_dict(input_data)
@@ -102,8 +107,9 @@ def test_build_particles_normalized_ions(test_context):
     dct = particles.to_dict() # transfers it to cpu
     xo.assert_allclose(dct['x'], [6.5404e-3, 1.21e-5, -6.5163e-3],
                        rtol=0, atol=1e-7)
-    assert np.isclose(dct['ptau'][1], 9.906e-6, rtol=0, atol=1e-9)
-    assert np.isclose(1/(dct['rpp'][1]) - 1, 1e-5, rtol=0, atol=1e-10)
+    xo.assert_allclose(dct['ptau'][1], 9.906e-6, rtol=0, atol=1e-9)
+    xo.assert_allclose(
+        1/(dct['rpp'][1]) - 1, 1e-5, rtol=0, atol=1e-10)
     xo.assert_allclose(dct['p0c'], 1.4024063e+12, rtol=0, atol=1e3)
 
 
@@ -115,7 +121,7 @@ def test_build_particles_normalized_closed_orbit(test_context):
 
 
     # Load machine model (from pymask)
-    filename = xt._pkg_root.parent.joinpath('test_data/lhc_no_bb/line_and_particle.json')
+    filename = XT_TEST_DATA_FOLDER.joinpath('lhc_no_bb/line_and_particle.json')
     with open(filename, 'r') as fid:
         input_data = json.load(fid)
     line = xt.Line.from_dict(input_data['line'])
@@ -147,14 +153,15 @@ def test_build_particles_normalized_match_at_s(test_context):
                       delta=[10], _context=test_context)
 
     # Load machine model (from pymask)
-    filename = xt._pkg_root.parent.joinpath('test_data/lhc_no_bb/line_and_particle.json')
+    filename = XT_TEST_DATA_FOLDER.joinpath('lhc_no_bb/line_and_particle.json')
     with open(filename, 'r') as fid:
         input_data = json.load(fid)
     line = xt.Line.from_dict(input_data['line'])
 
     at_element = 'ip6'
     i_start = line.element_names.index(at_element)
-    s_start = line.get_s_position(i_start)
+    tt = line.get_table()
+    s_start = tt['s', i_start]
     # Find first active element
     for iele in range(i_start, len(line)):
         ee = line[iele]
@@ -162,10 +169,10 @@ def test_build_particles_normalized_match_at_s(test_context):
             i_next_active = iele
             break
 
-    match_at_s = line.get_s_position(i_next_active) - 0.11
+    match_at_s = tt['s', i_next_active] - 0.11
 
     # Ensure there is a Marker between at_element and match_at_s (to test behave_likes_drift)
-    line.insert_element(element=xt.Marker(), name='test_marker', at_s=s_start + 0.3*(match_at_s-s_start))
+    line.insert('test_marker', obj=xt.Marker(), at=s_start + 0.3*(match_at_s-s_start))
 
     line.build_tracker(_context=test_context)
 
@@ -184,7 +191,7 @@ def test_build_particles_normalized_match_at_s(test_context):
     particles.move(_context=xo.context_default)
     assert not np.allclose(particles.x, 0.02, atol=1e-20)
     line.discard_tracker()
-    line.insert_element(element=xt.Marker(), name='match_at_s', at_s=match_at_s)
+    line.insert('match_at_s', obj=xt.Marker(), at=match_at_s)
     line.build_tracker(_context=test_context)
     particles.move(_context=test_context)
     line.track(particles, ele_stop='match_at_s')
@@ -198,8 +205,7 @@ def test_build_particles_normalized_match_at_s(test_context):
 def test_build_perticles_dispersion(test_context):
 
     # Load machine model (from pymask)
-    filename = xt._pkg_root.parent.joinpath(
-                                'test_data/lhc_no_bb/line_and_particle.json')
+    filename = XT_TEST_DATA_FOLDER.joinpath('lhc_no_bb/line_and_particle.json')
     with open(filename, 'r') as fid:
         input_data = json.load(fid)
 
